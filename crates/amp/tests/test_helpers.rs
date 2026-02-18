@@ -19,6 +19,7 @@ pub fn amp_bin() -> Command {
 }
 
 /// Run amp, assert exit code, return parsed JSON stdout.
+#[allow(dead_code)]
 pub fn amp_json(args: &[&str], expected_exit: i32) -> Value {
     let out = amp_bin().args(args).output().expect("failed to run amp");
     let code = out.status.code().unwrap_or(-1);

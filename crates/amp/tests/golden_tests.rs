@@ -1,7 +1,7 @@
 //! Golden tests: persona -> expected prompt output.
 
 mod test_helpers;
-use test_helpers::{amp_bin, workspace_root};
+use test_helpers::amp_bin;
 
 use std::path::PathBuf;
 
