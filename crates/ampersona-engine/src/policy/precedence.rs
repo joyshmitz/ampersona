@@ -253,6 +253,17 @@ mod tests {
     }
 
     #[test]
+    fn workspace_defaults_restrict_persona_authority() {
+        let workspace_defaults = make_authority(AutonomyLevel::Readonly, vec!["read_file"], vec![]);
+        let persona = make_authority(AutonomyLevel::Full, vec!["read_file", "write_file"], vec![]);
+
+        let resolved = resolve_authority(&[&workspace_defaults, &persona]);
+        assert_eq!(resolved.autonomy, AutonomyLevel::Readonly);
+        assert_eq!(resolved.allowed_actions.len(), 1);
+        assert_eq!(resolved.allowed_actions[0].to_string(), "read_file");
+    }
+
+    #[test]
     fn limits_are_min() {
         let a = Authority {
             autonomy: AutonomyLevel::Full,

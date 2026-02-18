@@ -165,6 +165,71 @@ fn authority_exit_code_needs_approval() {
     assert_eq!(v["decision"], "NeedsApproval");
 }
 
+// ── Workspace Defaults (2) ──────────────────────────────────────
+
+#[test]
+fn workspace_init_creates_defaults_file() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let out = amp_bin()
+        .current_dir(dir.path())
+        .args(["init", "--workspace"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "init --workspace failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let defaults_path = dir.path().join(".ampersona/defaults.json");
+    assert!(defaults_path.exists(), "defaults file was not created");
+
+    let defaults_text = std::fs::read_to_string(&defaults_path).unwrap();
+    let defaults: serde_json::Value = serde_json::from_str(&defaults_text).unwrap();
+    assert_eq!(defaults["authority"]["autonomy"], "supervised");
+}
+
+#[test]
+fn workspace_defaults_restrict_authority() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("zeroclaw_agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let persona = persona_path.to_str().unwrap();
+
+    // Baseline without workspace defaults: read_file is allowed for zeroclaw example.
+    let baseline = amp_bin()
+        .current_dir(dir.path())
+        .args(["authority", persona, "--check", "read_file", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(baseline.status.code(), Some(0));
+    let baseline_json: serde_json::Value = serde_json::from_slice(&baseline.stdout).unwrap();
+    assert_eq!(baseline_json["decision"], "Allow");
+
+    // Add restrictive workspace defaults and verify they are applied.
+    std::fs::create_dir_all(dir.path().join(".ampersona")).unwrap();
+    std::fs::write(
+        dir.path().join(".ampersona/defaults.json"),
+        r#"{"authority":{"autonomy":"readonly"}}"#,
+    )
+    .unwrap();
+
+    let restricted = amp_bin()
+        .current_dir(dir.path())
+        .args(["authority", persona, "--check", "read_file", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(restricted.status.code(), Some(1));
+    let restricted_json: serde_json::Value = serde_json::from_slice(&restricted.stdout).unwrap();
+    assert_eq!(restricted_json["decision"], "Deny");
+    assert_eq!(restricted_json["autonomy"], "readonly");
+}
+
 // ── Gate (3) ────────────────────────────────────────────────────
 
 #[test]

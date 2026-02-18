@@ -12,14 +12,14 @@ Status legend: `done` = implemented + tested, `partial` = implemented but incomp
 | 6 | Extensions namespace (ext) | done | P1 | Used in zeroclaw converter (ext.zeroclaw) |
 | 7 | Action vocabulary + custom namespace | done | P1 | actions::parse_builtin, parse_custom, parse_invalid_custom, suggest_typo |
 | 8 | Deny entries with compliance reasons | done | P1 | deny_wins, deny_by_default_unknown, elevation_denied_action_not_granted |
-| 9 | Workspace defaults (.ampersona/) | partial | P1+P2 | load_workspace_defaults() exists + used in cmd_authority; `amp init --workspace` scaffolds file |
+| 9 | Workspace defaults (.ampersona/) | done | P1+P2 | `init --workspace` + conformance coverage: workspace_init_creates_defaults_file, workspace_defaults_restrict_authority |
 | 10 | Gates (promote+demote+metrics_schema) | done | P1 | gates::evaluator — 6 tests |
 | 11 | Gate enforcement modes (enforce/observe) | done | P1+P3 | observe_mode_does_not_block |
 | 12 | Gate deterministic priority + hysteresis | done | P1+P3 | demote_wins_over_promote, cooldown_prevents_reevaluation |
 | 13 | Signature spec (JCS, key_id, signed_fields) | done | P1+P4 | ampersona-sign: canonical.rs (3 tests), sign.rs (key_id + signed_fields), verify.rs (canon + key_id match) |
 | 14 | Audit spec + event taxonomy | done | P1 | audit_log — append_and_verify_chain, checkpoint_create_and_verify, verify_detects_tampering |
 | 15 | State architecture (.state+.drift+.audit+.lock) | done | P1+P3 | state::atomic — 6 tests, audit_log — 3 tests |
-| 16 | Authority precedence rules | done | P1+P2 | policy::precedence — 8+1 tests (intersection, union, min, elevation, deny, deny_metadata_preserved) |
+| 16 | Authority precedence rules | done | P1+P2 | policy::precedence — 9+1 tests (intersection, union, min, elevation, deny, workspace defaults, deny_metadata_preserved) |
 | 17 | Schema evolution ($schema, versioning) | done | P1 | Schema file, $schema in converters, migrate module |
 | 18 | Traits (typed contracts + Result) | done | P1 | AuthorityEnforcer, MetricsProvider, AuditSink traits; UnitFloat, Autonomy types; DenyMeta |
 | 19 | Contract versioning (ampersona_contract) | done | P5 | check_contract() + W020 warning; 2 tests (known + unknown version) |
@@ -28,12 +28,12 @@ Status legend: `done` = implemented + tested, `partial` = implemented but incomp
 | 22 | `amp check` (--json, --strict, action vocab) | done | P1 | v02_check_json_produces_structured_output; --json + --strict + action_vocab + signature + lint |
 | 23 | `amp init` (--workspace) | done | P1 | Scaffolds persona.json or .ampersona/defaults.json |
 | 24 | DefaultPolicyChecker (layered gates) | done | P2 | policy::checker — 8 tests |
-| 25 | Precedence resolver | done | P2 | policy::precedence — 9 tests |
+| 25 | Precedence resolver | done | P2 | policy::precedence — 10 tests |
 | 26 | Elevation logic (TTL, sliding window) | done | P2 | elevation_grants_add_actions, expired_elevation_ignored |
 | 27 | `amp authority --check` (--json, --path, --context) | done | P2+P5 | Exit codes 0/1/2/3; deny_entry with compliance_ref; path scope; context matching |
 | 28 | `amp elevate` | done | P2 | cmd_elevate with TTL, atomic state write |
 | 29 | `amp import --from aieos` | done | P2 | import_aieos with full v1.1 normalization (14 tests) + CLI wired |
-| 30 | Property tests (precedence/merge) | done | P2 | 8 precedence tests cover intersection, union, min, deny-removes-from-allowed |
+| 30 | Property tests (precedence/merge) | done | P2 | 9 precedence tests cover intersection, union, min, deny-removes-from-allowed, workspace-default layering |
 | 31 | DefaultGateEvaluator (deterministic + hysteresis) | done | P3 | gates::evaluator — 6 tests |
 | 32 | Override mechanism (gate bypass + strong audit) | done | P3 | override_gate.rs + cmd_gate --override with reason + approver |
 | 33 | Gate decision records (metrics snapshot) | done | P3 | GateDecisionRecord with metrics_snapshot, criteria_results, metrics_hash |
@@ -58,12 +58,12 @@ Status legend: `done` = implemented + tested, `partial` = implemented but incomp
 | 52 | zeroclaw integration | done | P5 | Converter (import/export + 12 tests) + example persona + integration script + conformance tests |
 | 53 | agent_mail integration | done | P5 | Example persona + `amp register --rpc` MCP payload + integration script + conformance tests |
 | 54 | odoov19 integration | done | P5 | Example persona with compliance_ref deny entries + F1→F4 gates + integration script + conformance tests |
-| 55 | Consumer conformance tests | done | P5 | 23 conformance tests: validation(3), authority(7), gate(3), import/export(3), register(2), audit(1), edge cases(3), E2E lifecycle(1) |
+| 55 | Consumer conformance tests | done | P5 | 25 conformance tests: validation(3), authority(7), workspace defaults(2), gate(3), import/export(3), register(2), audit(1), edge cases(3), E2E lifecycle(1) |
 
 ## Summary
 
-- **done:** 54 / 55
-- **partial:** 1 / 55 (workspace defaults — functional but no integration-level tests)
+- **done:** 55 / 55
+- **partial:** 0 / 55
 - **not_started:** 0 / 55
-- **Total tests:** 108 across 4 crates (core: 14, engine: 58, sign: 3, amp: 33 integration)
+- **Total tests:** 111 across 4 crates (core: 14, engine: 59, sign: 3, amp: 35 integration)
 - **Phases 0a–5 complete.** All consumer integration hardening done.
