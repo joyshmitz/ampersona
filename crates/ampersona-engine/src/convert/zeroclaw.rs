@@ -69,10 +69,7 @@ fn string_list(value: &Value) -> Vec<String> {
 }
 
 fn string_array_at(value: &Value, key: &str) -> Vec<String> {
-    value
-        .get(key)
-        .map(|v| string_list(v))
-        .unwrap_or_default()
+    value.get(key).map(string_list).unwrap_or_default()
 }
 
 fn normalize_alignment(raw: &str) -> Option<String> {
@@ -139,10 +136,12 @@ fn normalize_identity(zc: &Value, obj: &mut Map<String, Value>) {
 
 /// Normalize capabilities from `identity.capabilities` or top-level `capabilities`.
 fn normalize_capabilities(zc: &Value) -> Option<Value> {
-    let source = value_at_path(zc, &["identity", "capabilities"])
-        .or_else(|| zc.get("capabilities"))?;
+    let source =
+        value_at_path(zc, &["identity", "capabilities"]).or_else(|| zc.get("capabilities"))?;
 
-    let arr = source.get("skills").and_then(Value::as_array)
+    let arr = source
+        .get("skills")
+        .and_then(Value::as_array)
         .or_else(|| source.as_array())?;
 
     let skills: Vec<Value> = arr
@@ -193,7 +192,11 @@ fn normalize_authority(zc: &Value) -> Option<Value> {
     let autonomy_raw = policy
         .and_then(|p| p.get("autonomy"))
         .and_then(scalar_to_string)
-        .or_else(|| autonomy_cfg.and_then(|a| a.get("level")).and_then(scalar_to_string))
+        .or_else(|| {
+            autonomy_cfg
+                .and_then(|a| a.get("level"))
+                .and_then(scalar_to_string)
+        })
         .or_else(|| autonomy_cfg.and_then(scalar_to_string))
         .unwrap_or_else(|| "supervised".into());
 
@@ -320,7 +323,9 @@ fn normalize_authority(zc: &Value) -> Option<Value> {
     let sandbox = policy
         .and_then(|p| p.get("sandbox"))
         .and_then(scalar_to_string)
-        .or_else(|| value_at_path(zc, &["security", "sandbox", "backend"]).and_then(scalar_to_string))
+        .or_else(|| {
+            value_at_path(zc, &["security", "sandbox", "backend"]).and_then(scalar_to_string)
+        })
         .or_else(|| value_at_path(zc, &["security", "sandbox"]).and_then(scalar_to_string));
     if let Some(sb) = sandbox {
         zc_ext.insert("sandbox".into(), Value::String(sb));
@@ -339,7 +344,7 @@ fn normalize_authority(zc: &Value) -> Option<Value> {
     }
 
     if let Some(aa) = autonomy_cfg.and_then(|a| a.get("always_ask")) {
-        if aa.as_array().map_or(false, |a| !a.is_empty()) {
+        if aa.as_array().is_some_and(|a| !a.is_empty()) {
             zc_ext.insert("always_ask".into(), aa.clone());
         }
     }
@@ -432,8 +437,8 @@ fn normalize_psychology(zc: &Value) -> Option<Value> {
     if let Some(mc) = section.get("moral_compass") {
         let mut result = Map::new();
         if let Some(alignment_raw) = mc.get("alignment").and_then(scalar_to_string) {
-            let normalized = normalize_alignment(&alignment_raw)
-                .unwrap_or_else(|| alignment_raw.to_lowercase());
+            let normalized =
+                normalize_alignment(&alignment_raw).unwrap_or_else(|| alignment_raw.to_lowercase());
             result.insert("alignment".into(), Value::String(normalized));
         }
         if let Some(values) = mc.get("core_values").and_then(Value::as_array) {
@@ -626,7 +631,10 @@ pub fn export_zeroclaw(data: &Value) -> Result<Value> {
     if let Some(backstory) = data.get("backstory").and_then(scalar_to_string) {
         identity.insert("backstory".into(), Value::String(backstory));
     }
-    if let Some(skills) = data.pointer("/capabilities/skills").and_then(Value::as_array) {
+    if let Some(skills) = data
+        .pointer("/capabilities/skills")
+        .and_then(Value::as_array)
+    {
         let caps: Vec<Value> = skills
             .iter()
             .filter_map(|s| s.get("name").and_then(scalar_to_string).map(Value::String))
@@ -704,8 +712,7 @@ pub fn export_zeroclaw(data: &Value) -> Result<Value> {
             .pointer("/moral_compass/alignment")
             .and_then(Value::as_str)
         {
-            p["moral_compass"]["alignment"] =
-                Value::String(denormalize_alignment(alignment));
+            p["moral_compass"]["alignment"] = Value::String(denormalize_alignment(alignment));
         }
         config.insert("psychology".into(), p);
     }
@@ -799,10 +806,7 @@ mod tests {
         let persona = import_zeroclaw(&zc).unwrap();
         assert_eq!(persona["authority"]["autonomy"], "full");
         assert_eq!(persona["authority"]["scope"]["workspace_only"], true);
-        assert_eq!(
-            persona["authority"]["scope"]["forbidden_paths"][0],
-            "/etc"
-        );
+        assert_eq!(persona["authority"]["scope"]["forbidden_paths"][0], "/etc");
         assert_eq!(persona["authority"]["limits"]["max_actions_per_hour"], 100);
         assert_eq!(
             persona["authority"]["limits"]["max_cost_per_day_cents"],
@@ -812,10 +816,7 @@ mod tests {
             persona["authority"]["actions"]["scoped"]["shell"]["block_high_risk"],
             false
         );
-        assert_eq!(
-            persona["authority"]["actions"]["allow"][0],
-            "read_file"
-        );
+        assert_eq!(persona["authority"]["actions"]["allow"][0], "read_file");
         assert_eq!(
             persona["authority"]["ext"]["zeroclaw"]["sandbox"],
             "landlock"
@@ -894,7 +895,10 @@ mod tests {
         assert_eq!(persona["psychology"]["neural_matrix"]["reliability"], 0.95);
         assert_eq!(persona["psychology"]["traits"]["mbti"], "INTJ");
         assert_eq!(persona["psychology"]["traits"]["ocean"]["openness"], 0.7);
-        assert_eq!(persona["psychology"]["traits"]["temperament"], "melancholic");
+        assert_eq!(
+            persona["psychology"]["traits"]["temperament"],
+            "melancholic"
+        );
         assert_eq!(
             persona["psychology"]["moral_compass"]["alignment"],
             "lawful-good"
@@ -922,10 +926,7 @@ mod tests {
             persona["voice"]["idiolect"]["catchphrases"][0],
             "Let me verify that"
         );
-        assert_eq!(
-            persona["voice"]["idiolect"]["forbidden_words"][0],
-            "maybe"
-        );
+        assert_eq!(persona["voice"]["idiolect"]["forbidden_words"][0], "maybe");
 
         // Directives
         assert_eq!(
@@ -956,10 +957,7 @@ mod tests {
         });
 
         let persona = import_zeroclaw(&zc).unwrap();
-        assert_eq!(
-            persona["capabilities"]["skills"][0]["name"],
-            "Code Review"
-        );
+        assert_eq!(persona["capabilities"]["skills"][0]["name"], "Code Review");
         assert_eq!(persona["capabilities"]["skills"][0]["priority"], 1);
         assert_eq!(persona["capabilities"]["skills"][1]["name"], "Testing");
         assert_eq!(persona["capabilities"]["skills"][1]["priority"], 2);
@@ -1053,10 +1051,7 @@ mod tests {
         assert_eq!(exported["security_policy"]["autonomy"], "full");
         assert_eq!(exported["security_policy"]["sandbox"], "landlock");
         assert_eq!(exported["security_policy"]["pairing_required"], true);
-        assert_eq!(
-            exported["security_policy"]["allowed_paths"][0],
-            "src/**"
-        );
+        assert_eq!(exported["security_policy"]["allowed_paths"][0], "src/**");
         assert_eq!(exported["security_policy"]["max_actions_per_hour"], 50);
 
         // Re-import
@@ -1159,23 +1154,11 @@ mod tests {
 
         let exported = export_zeroclaw(&persona).unwrap();
         assert_eq!(exported["security_policy"]["autonomy"], "supervised");
-        assert_eq!(
-            exported["security_policy"]["allowed_commands"][0],
-            "cargo"
-        );
-        assert_eq!(
-            exported["security_policy"]["max_actions_per_hour"],
-            200
-        );
-        assert_eq!(
-            exported["security_policy"]["max_cost_per_day_cents"],
-            1000
-        );
+        assert_eq!(exported["security_policy"]["allowed_commands"][0], "cargo");
+        assert_eq!(exported["security_policy"]["max_actions_per_hour"], 200);
+        assert_eq!(exported["security_policy"]["max_cost_per_day_cents"], 1000);
         assert_eq!(exported["security_policy"]["sandbox"], "landlock");
-        assert_eq!(
-            exported["security_policy"]["always_ask"][0],
-            "rm"
-        );
+        assert_eq!(exported["security_policy"]["always_ask"][0], "rm");
         assert_eq!(
             exported["security_policy"]["resources"]["max_memory_mb"],
             1024
