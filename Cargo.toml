@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "crates/ampersona-core",
+    "crates/ampersona-engine",
+    "crates/ampersona-sign",
+    "crates/amp",
+]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

@@ -1,0 +1,15 @@
+[package]
+name = "ampersona-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Types, traits, schema, and migration for ampersona agent identity platform."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+anyhow = "1"
+jsonschema = "0.29"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+toon = { path = "../../../toon_rust", package = "tru" }

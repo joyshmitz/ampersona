@@ -1,0 +1,21 @@
+[package]
+name = "amp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI for ampersona agent identity platform."
+
+[[bin]]
+name = "amp"
+path = "src/main.rs"
+
+[dependencies]
+ampersona-core = { path = "../ampersona-core" }
+ampersona-engine = { path = "../ampersona-engine" }
+ampersona-sign = { path = "../ampersona-sign" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }

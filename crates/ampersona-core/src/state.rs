@@ -1,0 +1,62 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+/// Persistent phase state for an agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseState {
+    pub name: String,
+    pub current_phase: Option<String>,
+    pub state_rev: u64,
+    #[serde(default)]
+    pub active_elevations: Vec<ActiveElevation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_transition: Option<TransitionRecord>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl PhaseState {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            current_phase: None,
+            state_rev: 0,
+            active_elevations: Vec::new(),
+            last_transition: None,
+            updated_at: Utc::now(),
+        }
+    }
+}
+
+/// An active temporary elevation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveElevation {
+    pub elevation_id: String,
+    pub granted_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub reason: String,
+    pub granted_by: String,
+}
+
+impl ActiveElevation {
+    pub fn is_expired(&self) -> bool {
+        Utc::now() > self.expires_at
+    }
+}
+
+/// Record of a gate transition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransitionRecord {
+    pub gate_id: String,
+    pub from_phase: Option<String>,
+    pub to_phase: String,
+    pub at: DateTime<Utc>,
+    pub decision_id: String,
+}
+
+/// A single drift ledger entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriftEntry {
+    pub prev_hash: String,
+    pub metrics: serde_json::Value,
+    pub ts: DateTime<Utc>,
+}

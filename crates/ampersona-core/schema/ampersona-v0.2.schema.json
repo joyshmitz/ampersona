@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ampersona.dev/schema/v0.2/ampersona.schema.json",
+  "title": "ampersona v0.2 — Agent Persona Specification",
+  "description": "Behavioral identity for LLM agents. What affects how the agent thinks, writes, and acts — nothing else.",
+  "type": "object",
+  "required": ["name", "role", "psychology", "voice"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Display name. Use as the agent's identity in prompts and coordination."
+    },
+    "role": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One-line role description (e.g. 'System Architect', 'QA Engineer')."
+    },
+    "backstory": {
+      "type": "string",
+      "description": "Free-text origin context. Shapes how the agent frames its expertise and perspective."
+    },
+    "psychology": {
+      "$ref": "#/$defs/Psychology"
+    },
+    "voice": {
+      "$ref": "#/$defs/Voice"
+    },
+    "capabilities": {
+      "$ref": "#/$defs/Capabilities"
+    },
+    "directives": {
+      "$ref": "#/$defs/Directives"
+    }
+  },
+  "$defs": {
+    "UnitFloat": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Normalized value 0.0–1.0."
+    },
+    "Psychology": {
+      "type": "object",
+      "description": "Cognitive weights, personality traits, and behavioral boundaries.",
+      "required": ["neural_matrix", "traits"],
+      "additionalProperties": false,
+      "properties": {
+        "neural_matrix": {
+          "type": "object",
+          "description": "Core cognitive weights defining baseline behavior.",
+          "required": ["creativity", "empathy", "logic", "adaptability", "charisma", "reliability"],
+          "additionalProperties": false,
+          "properties": {
+            "creativity":   { "$ref": "#/$defs/UnitFloat" },
+            "empathy":      { "$ref": "#/$defs/UnitFloat" },
+            "logic":        { "$ref": "#/$defs/UnitFloat" },
+            "adaptability": { "$ref": "#/$defs/UnitFloat" },
+            "charisma":     { "$ref": "#/$defs/UnitFloat" },
+            "reliability":  { "$ref": "#/$defs/UnitFloat" }
+          }
+        },
+        "traits": {
+          "type": "object",
+          "required": ["ocean", "mbti"],
+          "additionalProperties": false,
+          "properties": {
+            "ocean": {
+              "type": "object",
+              "description": "Big Five personality dimensions.",
+              "required": ["openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"],
+              "additionalProperties": false,
+              "properties": {
+                "openness":          { "$ref": "#/$defs/UnitFloat" },
+                "conscientiousness": { "$ref": "#/$defs/UnitFloat" },
+                "extraversion":      { "$ref": "#/$defs/UnitFloat" },
+                "agreeableness":     { "$ref": "#/$defs/UnitFloat" },
+                "neuroticism":       { "$ref": "#/$defs/UnitFloat" }
+              }
+            },
+            "mbti": {
+              "type": "string",
+              "enum": ["ISTJ","ISFJ","INFJ","INTJ","ISTP","ISFP","INFP","INTP","ESTP","ESFP","ENFP","ENTP","ESTJ","ESFJ","ENFJ","ENTJ"]
+            },
+            "temperament": {
+              "type": "string",
+              "description": "Classical temperament (e.g. 'melancholic-choleric', 'sanguine')."
+            }
+          }
+        },
+        "moral_compass": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "alignment": {
+              "type": "string",
+              "enum": ["lawful-good","neutral-good","chaotic-good","lawful-neutral","true-neutral","chaotic-neutral","lawful-evil","neutral-evil","chaotic-evil"]
+            },
+            "core_values": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1
+            }
+          }
+        },
+        "emotional_profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "base_mood": { "type": "string", "minLength": 1 },
+            "volatility": { "$ref": "#/$defs/UnitFloat" }
+          }
+        }
+      }
+    },
+    "Voice": {
+      "type": "object",
+      "description": "How the agent writes and speaks. The behavioral output layer.",
+      "required": ["style"],
+      "additionalProperties": false,
+      "properties": {
+        "style": {
+          "type": "object",
+          "required": ["descriptors", "formality", "verbosity"],
+          "additionalProperties": false,
+          "properties": {
+            "descriptors": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "description": "Style keywords (e.g. ['precise', 'concise', 'technical'])."
+            },
+            "formality": { "$ref": "#/$defs/UnitFloat" },
+            "verbosity": { "$ref": "#/$defs/UnitFloat" }
+          }
+        },
+        "syntax": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "structure": {
+              "type": "string",
+              "description": "Sentence structure preference (e.g. 'short declarative', 'compound-complex')."
+            },
+            "contractions": {
+              "type": "boolean",
+              "description": "Whether the agent uses contractions."
+            }
+          }
+        },
+        "idiolect": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "catchphrases": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Signature phrases the agent tends to use."
+            },
+            "forbidden_words": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Words the agent never uses."
+            }
+          }
+        },
+        "tts": {
+          "type": "object",
+          "description": "Text-to-speech configuration for voice synthesis.",
+          "required": ["provider", "voice_id"],
+          "additionalProperties": true,
+          "properties": {
+            "provider": {
+              "type": "string",
+              "minLength": 1,
+              "description": "TTS provider (e.g. 'elevenlabs', 'openai', 'azure')."
+            },
+            "voice_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Provider-specific voice identifier."
+            },
+            "stability": { "$ref": "#/$defs/UnitFloat" },
+            "similarity_boost": { "$ref": "#/$defs/UnitFloat" },
+            "speed": { "$ref": "#/$defs/UnitFloat" }
+          }
+        }
+      }
+    },
+    "Skill": {
+      "type": "object",
+      "required": ["name", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "priority": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "1 = highest, 10 = lowest."
+        }
+      }
+    },
+    "Capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "skills": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Skill" },
+          "description": "What this agent can do, ordered by priority."
+        }
+      }
+    },
+    "Directives": {
+      "type": "object",
+      "description": "What drives the agent and what constrains it.",
+      "additionalProperties": false,
+      "properties": {
+        "core_drive": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The agent's primary motivation in one sentence."
+        },
+        "goals": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Current objectives."
+        },
+        "constraints": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Hard behavioral boundaries (e.g. 'never deploy without tests', 'always ask before deleting')."
+        }
+      }
+    }
+  }
+}

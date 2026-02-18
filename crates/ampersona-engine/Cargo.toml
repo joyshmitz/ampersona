@@ -1,0 +1,28 @@
+[package]
+name = "ampersona-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Policy checker, gate evaluator, state machine for ampersona."
+
+[dependencies]
+ampersona-core = { path = "../ampersona-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+sha2 = "0.10"
+
+[features]
+default = []
+signing = ["ampersona-sign"]
+aieos = []
+zeroclaw = []
+
+[dependencies.ampersona-sign]
+path = "../ampersona-sign"
+optional = true
+
+[dev-dependencies]
+tempfile = "3"
