@@ -1,0 +1,49 @@
+[package]
+name = "ampersona-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ampersona-core = { path = "../crates/ampersona-core" }
+ampersona-engine = { path = "../crates/ampersona-engine" }
+serde_json = "1"
+
+[[bin]]
+name = "fuzz_parse"
+path = "fuzz_targets/fuzz_parse.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_check"
+path = "fuzz_targets/fuzz_check.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_migrate"
+path = "fuzz_targets/fuzz_migrate.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_import_aieos"
+path = "fuzz_targets/fuzz_import_aieos.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_import_zeroclaw"
+path = "fuzz_targets/fuzz_import_zeroclaw.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_export_zeroclaw"
+path = "fuzz_targets/fuzz_export_zeroclaw.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_compose"
+path = "fuzz_targets/fuzz_compose.rs"
+doc = false

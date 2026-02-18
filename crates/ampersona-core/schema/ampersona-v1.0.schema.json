@@ -33,7 +33,11 @@
       "type": "array",
       "items": { "$ref": "#/$defs/Gate" }
     },
-    "audit": { "$ref": "#/$defs/AuditConfig" }
+    "audit": { "$ref": "#/$defs/AuditConfig" },
+    "ampersona_contract": {
+      "type": "string",
+      "description": "Optional contract version this persona targets (e.g. '1.0')."
+    }
   },
   "$defs": {
     "UnitFloat": {

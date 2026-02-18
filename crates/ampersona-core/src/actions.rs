@@ -105,6 +105,11 @@ pub enum BuiltinAction {
     ApproveChange,
     DeleteProductionData,
     AutoApproveCapa,
+    FetchInbox,
+    RegisterAgent,
+    DeleteHistoricalData,
+    CreateReport,
+    ReviewCapa,
 }
 
 impl BuiltinAction {
@@ -131,6 +136,11 @@ impl BuiltinAction {
             Self::ApproveChange => "approve_change",
             Self::DeleteProductionData => "delete_production_data",
             Self::AutoApproveCapa => "auto_approve_capa",
+            Self::FetchInbox => "fetch_inbox",
+            Self::RegisterAgent => "register_agent",
+            Self::DeleteHistoricalData => "delete_historical_data",
+            Self::CreateReport => "create_report",
+            Self::ReviewCapa => "review_capa",
         }
     }
 
@@ -157,6 +167,11 @@ impl BuiltinAction {
             "approve_change" => Some(Self::ApproveChange),
             "delete_production_data" => Some(Self::DeleteProductionData),
             "auto_approve_capa" => Some(Self::AutoApproveCapa),
+            "fetch_inbox" => Some(Self::FetchInbox),
+            "register_agent" => Some(Self::RegisterAgent),
+            "delete_historical_data" => Some(Self::DeleteHistoricalData),
+            "create_report" => Some(Self::CreateReport),
+            "review_capa" => Some(Self::ReviewCapa),
             _ => None,
         }
     }
@@ -185,6 +200,11 @@ impl BuiltinAction {
             Self::ApproveChange,
             Self::DeleteProductionData,
             Self::AutoApproveCapa,
+            Self::FetchInbox,
+            Self::RegisterAgent,
+            Self::DeleteHistoricalData,
+            Self::CreateReport,
+            Self::ReviewCapa,
         ]
     }
 

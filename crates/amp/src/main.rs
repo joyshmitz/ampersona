@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::io::{self, Read};
 
 use anyhow::{bail, Result};
@@ -145,6 +146,22 @@ enum Cmd {
         /// Action to check.
         #[arg(long)]
         check: String,
+
+        /// Output structured JSON.
+        #[arg(long)]
+        json: bool,
+
+        /// Resource path for scope check.
+        #[arg(long)]
+        path: Option<String>,
+
+        /// Context key=value pairs for scoped actions.
+        #[arg(long, value_parser = parse_context_kv)]
+        context: Vec<(String, String)>,
+
+        /// Context as JSON object (merged with --context).
+        #[arg(long)]
+        context_json: Option<String>,
     },
 
     /// Activate a temporary elevation.
@@ -185,6 +202,10 @@ enum Cmd {
         /// Approver for override.
         #[arg(long)]
         approver: Option<String>,
+
+        /// Output structured JSON.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Sign a persona file.
@@ -219,6 +240,10 @@ enum Cmd {
         /// Verify the hash chain.
         #[arg(long)]
         verify: bool,
+
+        /// Output structured JSON.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Merge two personas (base + overlay).
@@ -281,28 +306,109 @@ enum Cmd {
     },
 }
 
-fn main() -> Result<()> {
+/// Parse "key=value" pairs for --context.
+fn parse_context_kv(s: &str) -> Result<(String, String), String> {
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid context: no `=` found in `{s}`"))?;
+    Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
+}
+
+// ── CmdExit: structured exit for commands with semantic exit codes ──
+
+enum CmdExit {
+    Ok,
+    Code(i32),
+    Err(anyhow::Error),
+    JsonErr {
+        code: &'static str,
+        message: String,
+        json: bool,
+    },
+}
+
+fn main() {
     let cli = Cli::parse();
 
-    match cli.cmd {
+    let result = match cli.cmd {
+        Cmd::Authority {
+            file,
+            check,
+            json,
+            path,
+            context,
+            context_json,
+        } => cmd_authority(&file, &check, json, path, context, context_json),
+
+        Cmd::Gate {
+            file,
+            evaluate,
+            metrics,
+            override_gate,
+            reason,
+            approver,
+            json,
+        } => cmd_gate(
+            &file,
+            evaluate,
+            metrics,
+            override_gate,
+            reason,
+            approver,
+            json,
+        ),
+
+        Cmd::Audit { file, verify, json } => cmd_audit(&file, verify, json),
+
+        other => match run_other(other) {
+            Ok(()) => CmdExit::Ok,
+            Err(e) => CmdExit::Err(e),
+        },
+    };
+
+    match result {
+        CmdExit::Ok => {}
+        CmdExit::Code(n) => std::process::exit(n),
+        CmdExit::Err(e) => {
+            eprintln!("error: {e:#}");
+            std::process::exit(1);
+        }
+        CmdExit::JsonErr {
+            code,
+            message,
+            json,
+        } => {
+            if json {
+                let err = serde_json::json!({
+                    "error": true,
+                    "code": code,
+                    "message": message,
+                });
+                println!("{}", serde_json::to_string_pretty(&err).unwrap());
+            } else {
+                eprintln!("error: {message}");
+            }
+            std::process::exit(3);
+        }
+    }
+}
+
+/// Dispatch commands that return Result<()> (no special exit codes).
+fn run_other(cmd: Cmd) -> Result<()> {
+    match cmd {
         Cmd::Prompt {
             file,
             toon,
             sections,
         } => cmd_prompt(&file, toon, &sections),
-
         Cmd::Validate { files } => cmd_validate(&files),
-
         Cmd::New {
             template,
             name,
             output,
         } => cmd_new(&template, name.as_deref(), output.as_deref()),
-
         Cmd::Templates => cmd_templates(),
-
         Cmd::List { dir } => cmd_list(&dir),
-
         Cmd::Register {
             file,
             project,
@@ -312,46 +418,21 @@ fn main() -> Result<()> {
             toon,
             rpc,
         } => cmd_register(&file, &project, &program, &model, prompt, toon, rpc),
-
         Cmd::Init { workspace } => cmd_init(workspace),
-
         Cmd::Check { file, json, strict } => cmd_check(&file, json, strict),
-
         Cmd::Migrate { files } => cmd_migrate(&files),
-
         Cmd::Status { file, json, drift } => cmd_status(&file, json, drift),
-
-        Cmd::Authority { file, check } => cmd_authority(&file, &check),
-
         Cmd::Elevate {
             file,
             elevation,
             reason,
         } => cmd_elevate(&file, &elevation, &reason),
-
-        Cmd::Gate {
-            file,
-            evaluate,
-            metrics,
-            override_gate,
-            reason,
-            approver,
-        } => cmd_gate(&file, evaluate, metrics, override_gate, reason, approver),
-
         Cmd::Sign { file, key, key_id } => cmd_sign(&file, &key, &key_id),
-
         Cmd::Verify { file, pubkey } => cmd_verify(&file, &pubkey),
-
-        Cmd::Audit { file, verify } => cmd_audit(&file, verify),
-
         Cmd::Compose { base, overlay } => cmd_compose(&base, &overlay),
-
         Cmd::Diff { a, b } => cmd_diff(&a, &b),
-
         Cmd::Import { file, from } => cmd_import(&file, &from),
-
         Cmd::Export { file, to } => cmd_export(&file, &to),
-
         Cmd::Fleet {
             dir,
             status,
@@ -359,6 +440,8 @@ fn main() -> Result<()> {
             json,
             apply_overlay,
         } => cmd_fleet(&dir, status, check, json, apply_overlay),
+        // Authority, Gate, Audit are handled in main() directly
+        _ => unreachable!(),
     }
 }
 
@@ -596,14 +679,60 @@ fn cmd_status(file: &str, json_out: bool, drift: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_authority(file: &str, action: &str) -> Result<()> {
-    let data = read_persona(file)?;
+fn cmd_authority(
+    file: &str,
+    action: &str,
+    json_out: bool,
+    path: Option<String>,
+    context_kvs: Vec<(String, String)>,
+    context_json: Option<String>,
+) -> CmdExit {
+    // Read persona file with structured error handling
+    let content = match std::fs::read_to_string(file) {
+        Ok(c) => c,
+        Err(e) => {
+            return CmdExit::JsonErr {
+                code: "E_FILE_NOT_FOUND",
+                message: format!("cannot read {file}: {e}"),
+                json: json_out,
+            };
+        }
+    };
+    let data: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(d) => d,
+        Err(e) => {
+            return CmdExit::JsonErr {
+                code: "E_INVALID_JSON",
+                message: format!("{file}: invalid JSON: {e}"),
+                json: json_out,
+            };
+        }
+    };
+    let persona: ampersona_core::spec::Persona = match serde_json::from_value(data.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return CmdExit::JsonErr {
+                code: "E_INVALID_PERSONA",
+                message: format!("{file}: invalid persona: {e}"),
+                json: json_out,
+            };
+        }
+    };
 
-    // Parse the persona to get authority
-    let persona: ampersona_core::spec::Persona = serde_json::from_value(data.clone())?;
+    // Build context from --context and --context-json
+    let mut ctx: HashMap<String, serde_json::Value> = HashMap::new();
+    for (k, v) in &context_kvs {
+        ctx.insert(k.clone(), serde_json::Value::String(v.clone()));
+    }
+    if let Some(cj) = &context_json {
+        if let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(cj) {
+            for (k, v) in obj {
+                ctx.insert(k, v);
+            }
+        }
+    }
 
-    let decision = if let Some(authority) = &persona.authority {
-        // Build authority layers: workspace defaults (lowest) → persona (highest)
+    let (decision, resolved) = if let Some(authority) = &persona.authority {
         let mut layers: Vec<&ampersona_core::spec::authority::Authority> = Vec::new();
         let workspace_defaults = ampersona_engine::policy::precedence::load_workspace_defaults();
         if let Some(ref wd) = workspace_defaults {
@@ -611,7 +740,6 @@ fn cmd_authority(file: &str, action: &str) -> Result<()> {
         }
         layers.push(authority);
 
-        // Load state to check active elevations
         let state_path = file.replace(".json", ".state.json");
         let state = ampersona_engine::state::phase::load_state(&state_path).ok();
 
@@ -636,18 +764,79 @@ fn cmd_authority(file: &str, action: &str) -> Result<()> {
                     action: action.into(),
                 }
             })),
-            path: None,
-            context: std::collections::HashMap::new(),
+            path: path.clone(),
+            context: ctx.clone(),
         };
-        checker.evaluate(&req, &resolved)?
-    } else {
-        ampersona_core::errors::PolicyDecision::Deny {
-            reason: "no authority section defined".to_string(),
+        match checker.evaluate(&req, &resolved) {
+            Ok(d) => (d, Some(resolved)),
+            Err(e) => {
+                return CmdExit::JsonErr {
+                    code: "E_INTERNAL",
+                    message: format!("policy evaluation error: {e}"),
+                    json: json_out,
+                };
+            }
         }
+    } else {
+        (
+            ampersona_core::errors::PolicyDecision::Deny {
+                reason: "no authority section defined".to_string(),
+            },
+            None,
+        )
     };
 
-    println!("{decision}");
-    Ok(())
+    // Determine exit code
+    let exit_code = match &decision {
+        ampersona_core::errors::PolicyDecision::Allow { .. } => 0,
+        ampersona_core::errors::PolicyDecision::Deny { .. } => 1,
+        ampersona_core::errors::PolicyDecision::NeedsApproval { .. } => 2,
+    };
+
+    if json_out {
+        let (decision_str, reason) = match &decision {
+            ampersona_core::errors::PolicyDecision::Allow { reason } => ("Allow", reason.clone()),
+            ampersona_core::errors::PolicyDecision::Deny { reason } => ("Deny", reason.clone()),
+            ampersona_core::errors::PolicyDecision::NeedsApproval { reason } => {
+                ("NeedsApproval", reason.clone())
+            }
+        };
+
+        // Look up deny metadata
+        let deny_entry = resolved
+            .as_ref()
+            .and_then(|r| r.deny_metadata.get(action))
+            .map(|m| {
+                serde_json::json!({
+                    "reason": m.reason,
+                    "compliance_ref": m.compliance_ref,
+                })
+            });
+
+        let autonomy_str = resolved
+            .as_ref()
+            .map(|r| format!("{:?}", r.autonomy).to_lowercase())
+            .unwrap_or_else(|| "n/a".into());
+
+        let output = serde_json::json!({
+            "action": action,
+            "decision": decision_str,
+            "reason": reason,
+            "autonomy": autonomy_str,
+            "deny_entry": deny_entry,
+            "path": path,
+            "context": ctx,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!("{decision}");
+    }
+
+    if exit_code == 0 {
+        CmdExit::Ok
+    } else {
+        CmdExit::Code(exit_code)
+    }
 }
 
 fn cmd_elevate(file: &str, elevation_id: &str, reason: &str) -> Result<()> {
@@ -675,7 +864,8 @@ fn cmd_elevate(file: &str, elevation_id: &str, reason: &str) -> Result<()> {
     state.state_rev += 1;
     state.updated_at = chrono::Utc::now();
 
-    ampersona_engine::state::phase::save_state(&state_path, &state)?;
+    let json = serde_json::to_string_pretty(&state)?;
+    ampersona_engine::state::atomic::atomic_write(&state_path, json.as_bytes())?;
     eprintln!(
         "  elevation '{elevation_id}' activated (TTL: {}s)",
         elev.ttl_seconds
@@ -690,7 +880,35 @@ fn cmd_gate(
     override_gate: Option<String>,
     reason: Option<String>,
     approver: Option<String>,
-) -> Result<()> {
+    json_out: bool,
+) -> CmdExit {
+    match cmd_gate_inner(
+        file,
+        evaluate,
+        metrics_file,
+        override_gate,
+        reason,
+        approver,
+        json_out,
+    ) {
+        Ok(exit) => exit,
+        Err(e) => CmdExit::JsonErr {
+            code: "E_INTERNAL",
+            message: format!("{e:#}"),
+            json: json_out,
+        },
+    }
+}
+
+fn cmd_gate_inner(
+    file: &str,
+    evaluate: Option<String>,
+    metrics_file: Option<String>,
+    override_gate: Option<String>,
+    reason: Option<String>,
+    approver: Option<String>,
+    json_out: bool,
+) -> Result<CmdExit> {
     let data = read_persona(file)?;
     let persona: ampersona_core::spec::Persona = serde_json::from_value(data)?;
 
@@ -725,15 +943,18 @@ fn cmd_gate(
         state.current_phase = Some(record.to_phase.clone());
         state.state_rev += 1;
         state.updated_at = chrono::Utc::now();
-        ampersona_engine::state::phase::save_state(&state_path, &state)?;
+        let json = serde_json::to_string_pretty(&state)?;
+        ampersona_engine::state::atomic::atomic_write(&state_path, json.as_bytes())?;
 
-        eprintln!(
-            "  override: {} → {} (by {approver})",
-            record.from_phase.as_deref().unwrap_or("none"),
-            record.to_phase
-        );
+        if !json_out {
+            eprintln!(
+                "  override: {} \u{2192} {} (by {approver})",
+                record.from_phase.as_deref().unwrap_or("none"),
+                record.to_phase
+            );
+        }
         println!("{}", serde_json::to_string_pretty(&record)?);
-        return Ok(());
+        return Ok(CmdExit::Ok);
     }
 
     if let Some(gate_id) = evaluate {
@@ -747,7 +968,6 @@ fn cmd_gate(
         let metrics_data: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&metrics_path)?)?;
 
-        // Build a simple metrics provider from JSON
         struct JsonMetrics(serde_json::Value);
         impl ampersona_core::traits::MetricsProvider for JsonMetrics {
             fn get_metric(
@@ -820,42 +1040,127 @@ fn cmd_gate(
                     if let Some(gate) = fired_gate {
                         if let Some(effect) = &gate.on_pass {
                             if let Some(overlay) = &effect.authority_overlay {
-                                // Write overlay alongside state for consumer use
                                 let overlay_path = file.replace(".json", ".authority_overlay.json");
                                 let overlay_json = serde_json::to_string_pretty(overlay)?;
                                 std::fs::write(&overlay_path, overlay_json)?;
-                                eprintln!("  authority overlay written to {overlay_path}");
+                                if !json_out {
+                                    eprintln!("  authority overlay written to {overlay_path}");
+                                }
                             }
                         }
                     }
 
-                    ampersona_engine::state::phase::save_state(&state_path, &state)?;
+                    let json = serde_json::to_string_pretty(&state)?;
+                    ampersona_engine::state::atomic::atomic_write(&state_path, json.as_bytes())?;
+                    if !json_out {
+                        eprintln!(
+                            "  transition: {} \u{2192} {}",
+                            record.from_phase.as_deref().unwrap_or("none"),
+                            record.to_phase
+                        );
+                    }
+                } else if !json_out {
                     eprintln!(
-                        "  transition: {} → {}",
-                        record.from_phase.as_deref().unwrap_or("none"),
-                        record.to_phase
-                    );
-                } else {
-                    eprintln!(
-                        "  observed (not applied): {} → {}",
+                        "  observed (not applied): {} \u{2192} {}",
                         record.from_phase.as_deref().unwrap_or("none"),
                         record.to_phase
                     );
                 }
                 println!("{}", serde_json::to_string_pretty(&record)?);
+                return Ok(CmdExit::Ok);
             } else {
-                eprintln!(
-                    "  gate '{gate_id}' did not fire (another gate matched: {})",
-                    record.gate_id
-                );
+                if !json_out {
+                    eprintln!(
+                        "  gate '{gate_id}' did not fire (another gate matched: {})",
+                        record.gate_id
+                    );
+                }
             }
-        } else {
+        }
+
+        // No gate fired (or requested gate didn't match).
+        // If a specific gate was requested and --json, produce diagnostic.
+        if json_out && gate_id != "*" {
+            if let Some(gate) = gates.iter().find(|g| g.id == gate_id) {
+                let diagnostic = diagnose_gate(gate, &metrics);
+                println!("{}", serde_json::to_string_pretty(&diagnostic)?);
+            } else {
+                let diagnostic = serde_json::json!({
+                    "gate_id": gate_id,
+                    "decision": "not_found",
+                    "reason": format!("gate '{gate_id}' not defined"),
+                });
+                println!("{}", serde_json::to_string_pretty(&diagnostic)?);
+            }
+        } else if !json_out {
             eprintln!("  no gate fired");
         }
-        return Ok(());
+        return Ok(CmdExit::Code(1));
     }
 
     bail!("specify --evaluate or --override");
+}
+
+/// Produce diagnostic JSON for a gate whose criteria failed.
+fn diagnose_gate(
+    gate: &ampersona_core::spec::gates::Gate,
+    metrics: &dyn ampersona_core::traits::MetricsProvider,
+) -> serde_json::Value {
+    let mut criteria_results = Vec::new();
+    for criterion in &gate.criteria {
+        let query = ampersona_core::traits::MetricQuery {
+            name: criterion.metric.clone(),
+            window: None,
+        };
+        let (actual, pass) = match metrics.get_metric(&query) {
+            Ok(sample) => {
+                let pass = compare_criterion(&criterion.op, &sample.value, &criterion.value);
+                (sample.value, pass)
+            }
+            Err(_) => (serde_json::Value::Null, false),
+        };
+        criteria_results.push(serde_json::json!({
+            "metric": criterion.metric,
+            "op": criterion.op,
+            "value": criterion.value,
+            "actual": actual,
+            "pass": pass,
+        }));
+    }
+    serde_json::json!({
+        "gate_id": gate.id,
+        "decision": "no_match",
+        "reason": "criteria not met",
+        "criteria_results": criteria_results,
+    })
+}
+
+fn compare_criterion(
+    op: &ampersona_core::types::CriterionOp,
+    actual: &serde_json::Value,
+    expected: &serde_json::Value,
+) -> bool {
+    use ampersona_core::types::CriterionOp;
+    match op {
+        CriterionOp::Eq => actual == expected,
+        CriterionOp::Neq => actual != expected,
+        CriterionOp::Gt => cmp_num(actual, expected).is_some_and(|c| c > 0),
+        CriterionOp::Gte => cmp_num(actual, expected).is_some_and(|c| c >= 0),
+        CriterionOp::Lt => cmp_num(actual, expected).is_some_and(|c| c < 0),
+        CriterionOp::Lte => cmp_num(actual, expected).is_some_and(|c| c <= 0),
+    }
+}
+
+fn cmp_num(a: &serde_json::Value, b: &serde_json::Value) -> Option<i8> {
+    let a_f = a.as_f64()?;
+    let b_f = b.as_f64()?;
+    if a_f > b_f {
+        Some(1)
+    } else if a_f < b_f {
+        Some(-1)
+    } else {
+        Some(0)
+    }
 }
 
 fn cmd_sign(file: &str, key_path: &str, key_id: &str) -> Result<()> {
@@ -902,18 +1207,54 @@ fn cmd_verify(file: &str, pubkey_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_audit(file: &str, verify: bool) -> Result<()> {
+fn cmd_audit(file: &str, verify: bool, json_out: bool) -> CmdExit {
     if !verify {
-        bail!("specify --verify");
+        return CmdExit::Err(anyhow::anyhow!("specify --verify"));
     }
     let audit_path = file.replace(".json", ".audit.jsonl");
     if !std::path::Path::new(&audit_path).exists() {
-        eprintln!("  no audit log found at {audit_path}");
-        return Ok(());
+        if json_out {
+            let output = serde_json::json!({
+                "valid": true,
+                "entries": 0,
+                "audit_path": audit_path,
+            });
+            println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        } else {
+            eprintln!("  no audit log found at {audit_path}");
+        }
+        return CmdExit::Ok;
     }
-    let count = ampersona_engine::state::audit_log::verify_chain(&audit_path)?;
-    eprintln!("  audit chain valid ({count} entries)");
-    Ok(())
+    match ampersona_engine::state::audit_log::verify_chain(&audit_path) {
+        Ok(count) => {
+            if json_out {
+                let output = serde_json::json!({
+                    "valid": true,
+                    "entries": count,
+                    "audit_path": audit_path,
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            } else {
+                eprintln!("  audit chain valid ({count} entries)");
+            }
+            CmdExit::Ok
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            // Try to extract entry number from error
+            if json_out {
+                let output = serde_json::json!({
+                    "valid": false,
+                    "error": msg,
+                    "audit_path": audit_path,
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            } else {
+                eprintln!("  audit chain INVALID: {msg}");
+            }
+            CmdExit::Code(1)
+        }
+    }
 }
 
 fn cmd_compose(base_path: &str, overlay_path: &str) -> Result<()> {

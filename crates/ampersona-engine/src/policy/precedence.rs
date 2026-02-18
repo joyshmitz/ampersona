@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use ampersona_core::actions::ActionId;
-use ampersona_core::spec::authority::{Authority, Elevation};
+use ampersona_core::spec::authority::{Authority, DenyEntry, Elevation};
 use ampersona_core::state::ActiveElevation;
-use ampersona_core::traits::ResolvedAuthority;
+use ampersona_core::traits::{DenyMeta, ResolvedAuthority};
 use ampersona_core::types::AutonomyLevel;
 
 /// Resolve authority from multiple layers (workspace defaults → persona → gate overlay → elevation).
@@ -20,16 +20,32 @@ pub fn resolve_authority(layers: &[&Authority]) -> ResolvedAuthority {
     let mut scope = None;
     let mut limits = None;
     let mut scoped_actions = HashMap::new();
+    let mut deny_metadata = HashMap::new();
 
     for layer in layers {
         // Autonomy: minimum
         autonomy = autonomy.min(layer.autonomy);
 
         if let Some(actions) = &layer.actions {
-            // Deny: union
+            // Deny: union (with metadata preservation)
             if let Some(deny) = &actions.deny {
                 for entry in deny {
-                    all_denied.push(entry.action_id().clone());
+                    let id = entry.action_id().clone();
+                    if let DenyEntry::WithReason {
+                        reason,
+                        compliance_ref,
+                        ..
+                    } = entry
+                    {
+                        deny_metadata.insert(
+                            id.to_string(),
+                            DenyMeta {
+                                reason: Some(reason.clone()),
+                                compliance_ref: compliance_ref.clone(),
+                            },
+                        );
+                    }
+                    all_denied.push(id);
                 }
             }
 
@@ -78,6 +94,7 @@ pub fn resolve_authority(layers: &[&Authority]) -> ResolvedAuthority {
         scope,
         limits,
         scoped_actions,
+        deny_metadata,
     }
 }
 
@@ -374,5 +391,34 @@ mod tests {
             .map(|a| a.to_string())
             .collect();
         assert!(!action_names.contains(&"git_push_main".to_string()));
+    }
+
+    #[test]
+    fn deny_metadata_preserved() {
+        let a = Authority {
+            autonomy: AutonomyLevel::Full,
+            scope: None,
+            actions: Some(Actions {
+                allow: Some(vec!["read_file".parse().unwrap()]),
+                deny: Some(vec![DenyEntry::WithReason {
+                    action: "delete_production_data".parse().unwrap(),
+                    reason: "Retention policy".into(),
+                    compliance_ref: Some("ISO 9001:2015 §7.5".into()),
+                }]),
+                scoped: None,
+            }),
+            limits: None,
+            elevations: None,
+            delegation: None,
+            ext: None,
+        };
+        let resolved = resolve_authority(&[&a]);
+        assert_eq!(resolved.denied_actions.len(), 1);
+        let meta = resolved
+            .deny_metadata
+            .get("delete_production_data")
+            .expect("deny_metadata should contain entry");
+        assert_eq!(meta.reason.as_deref(), Some("Retention policy"));
+        assert_eq!(meta.compliance_ref.as_deref(), Some("ISO 9001:2015 §7.5"));
     }
 }

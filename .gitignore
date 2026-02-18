@@ -1,1 +1,5 @@
 /target
+*.state.json
+*.audit.jsonl
+*.drift.jsonl
+*.lock

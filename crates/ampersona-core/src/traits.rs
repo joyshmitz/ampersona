@@ -36,6 +36,15 @@ pub struct PolicyRequest {
     pub context: HashMap<String, serde_json::Value>,
 }
 
+/// Metadata preserved from a deny entry (reason + compliance reference).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DenyMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compliance_ref: Option<String>,
+}
+
 /// Authority with all layers resolved (workspace+persona+gate+elevation).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedAuthority {
@@ -45,6 +54,8 @@ pub struct ResolvedAuthority {
     pub scope: Option<crate::spec::authority::Scope>,
     pub limits: Option<crate::spec::authority::Limits>,
     pub scoped_actions: HashMap<String, crate::spec::authority::ScopedAction>,
+    #[serde(default)]
+    pub deny_metadata: HashMap<String, DenyMeta>,
 }
 
 /// Evaluates policy requests against resolved authority.

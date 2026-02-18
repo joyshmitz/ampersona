@@ -109,6 +109,9 @@ pub fn check(data: &Value, file: &str, strict: bool) -> CheckReport {
         check_signature(data, &mut warnings);
     }
 
+    // Contract version check (opt-in)
+    check_contract(data, &mut warnings);
+
     // Lint checks
     lint_checks(data, &version, strict, &mut warnings);
 
@@ -210,6 +213,23 @@ fn check_signature(data: &Value, warnings: &mut Vec<CheckIssue>) {
     }
 }
 
+/// Known contract versions.
+const KNOWN_CONTRACT_VERSIONS: &[&str] = &["1.0"];
+
+fn check_contract(data: &Value, warnings: &mut Vec<CheckIssue>) {
+    if let Some(contract) = data.get("ampersona_contract").and_then(Value::as_str) {
+        if !KNOWN_CONTRACT_VERSIONS.contains(&contract) {
+            warnings.push(CheckIssue {
+                code: "W020".to_string(),
+                check: "contract".to_string(),
+                message: format!("ampersona_contract references unknown version '{contract}'"),
+                path: Some("$.ampersona_contract".to_string()),
+            });
+        }
+    }
+    // No warning for missing field — opt-in
+}
+
 fn lint_checks(data: &Value, version: &str, _strict: bool, warnings: &mut Vec<CheckIssue>) {
     if version != "1.0" {
         return;
@@ -249,5 +269,64 @@ fn lint_checks(data: &Value, version: &str, _strict: bool, warnings: &mut Vec<Ch
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_v10() -> Value {
+        serde_json::json!({
+            "version": "1.0",
+            "name": "Test",
+            "role": "test",
+            "psychology": {
+                "neural_matrix": {
+                    "creativity": 0.5, "empathy": 0.5, "logic": 0.5,
+                    "adaptability": 0.5, "charisma": 0.5, "reliability": 0.5
+                },
+                "traits": {
+                    "mbti": "INTJ", "temperament": "phlegmatic",
+                    "ocean": {
+                        "openness": 0.5, "conscientiousness": 0.5, "extraversion": 0.5,
+                        "agreeableness": 0.5, "neuroticism": 0.5
+                    }
+                },
+                "moral_compass": { "alignment": "neutral", "core_values": ["test"] },
+                "emotional_profile": { "base_mood": "calm", "volatility": 0.1 }
+            },
+            "voice": {
+                "style": { "descriptors": ["terse"], "formality": 0.5, "verbosity": 0.3 },
+                "syntax": { "structure": "declarative", "contractions": true },
+                "idiolect": { "catchphrases": ["test"], "forbidden_words": [] }
+            }
+        })
+    }
+
+    #[test]
+    fn contract_known_version_no_warning() {
+        let mut data = minimal_v10();
+        data.as_object_mut()
+            .unwrap()
+            .insert("ampersona_contract".into(), Value::String("1.0".into()));
+        let report = check(&data, "test.json", true);
+        assert!(
+            report.warnings.iter().all(|w| w.code != "W020"),
+            "should not warn on known contract version"
+        );
+    }
+
+    #[test]
+    fn contract_unknown_version_warns() {
+        let mut data = minimal_v10();
+        data.as_object_mut()
+            .unwrap()
+            .insert("ampersona_contract".into(), Value::String("99.0".into()));
+        let report = check(&data, "test.json", false);
+        assert!(
+            report.warnings.iter().any(|w| w.code == "W020"),
+            "should warn on unknown contract version"
+        );
     }
 }

@@ -1,18 +1,9 @@
 //! Golden tests: persona -> expected prompt output.
 
+mod test_helpers;
+use test_helpers::{amp_bin, workspace_root};
+
 use std::path::PathBuf;
-use std::process::Command;
-
-fn workspace_root() -> PathBuf {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest.parent().unwrap().parent().unwrap().to_path_buf()
-}
-
-fn amp_bin() -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_amp"));
-    cmd.current_dir(workspace_root());
-    cmd
-}
 
 #[test]
 fn golden_quiet_stone_prompt() {

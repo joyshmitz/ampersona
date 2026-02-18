@@ -19,30 +19,30 @@ Status legend: `done` = implemented + tested, `partial` = implemented but incomp
 | 13 | Signature spec (JCS, key_id, signed_fields) | done | P1+P4 | ampersona-sign: canonical.rs (3 tests), sign.rs (key_id + signed_fields), verify.rs (canon + key_id match) |
 | 14 | Audit spec + event taxonomy | done | P1 | audit_log — append_and_verify_chain, checkpoint_create_and_verify, verify_detects_tampering |
 | 15 | State architecture (.state+.drift+.audit+.lock) | done | P1+P3 | state::atomic — 6 tests, audit_log — 3 tests |
-| 16 | Authority precedence rules | done | P1+P2 | policy::precedence — 8 tests (intersection, union, min, elevation, deny) |
+| 16 | Authority precedence rules | done | P1+P2 | policy::precedence — 8+1 tests (intersection, union, min, elevation, deny, deny_metadata_preserved) |
 | 17 | Schema evolution ($schema, versioning) | done | P1 | Schema file, $schema in converters, migrate module |
-| 18 | Traits (typed contracts + Result) | done | P1 | AuthorityEnforcer, MetricsProvider, AuditSink traits; UnitFloat, Autonomy types |
-| 19 | Contract versioning (ampersona_contract) | not_started | P5 | Spec defined; runtime check deferred to consumer integration |
+| 18 | Traits (typed contracts + Result) | done | P1 | AuthorityEnforcer, MetricsProvider, AuditSink traits; UnitFloat, Autonomy types; DenyMeta |
+| 19 | Contract versioning (ampersona_contract) | done | P5 | check_contract() + W020 warning; 2 tests (known + unknown version) |
 | 20 | `amp validate` v1.0 | done | P1 | v10_quiet_stone_validates, v10_check_json_passes; auto-detect v0.2/v1.0 |
 | 21 | `amp migrate` | done | P1 | migrate::tests — 4 tests (adds_version, idempotent, rejects_non_object, handles_empty) |
 | 22 | `amp check` (--json, --strict, action vocab) | done | P1 | v02_check_json_produces_structured_output; --json + --strict + action_vocab + signature + lint |
 | 23 | `amp init` (--workspace) | done | P1 | Scaffolds persona.json or .ampersona/defaults.json |
 | 24 | DefaultPolicyChecker (layered gates) | done | P2 | policy::checker — 8 tests |
-| 25 | Precedence resolver | done | P2 | policy::precedence — 8 tests |
+| 25 | Precedence resolver | done | P2 | policy::precedence — 9 tests |
 | 26 | Elevation logic (TTL, sliding window) | done | P2 | elevation_grants_add_actions, expired_elevation_ignored |
-| 27 | `amp authority --check` | done | P2 | cmd_authority with workspace defaults + persona + gate overlay + elevation precedence |
+| 27 | `amp authority --check` (--json, --path, --context) | done | P2+P5 | Exit codes 0/1/2/3; deny_entry with compliance_ref; path scope; context matching |
 | 28 | `amp elevate` | done | P2 | cmd_elevate with TTL, atomic state write |
 | 29 | `amp import --from aieos` | done | P2 | import_aieos with full v1.1 normalization (14 tests) + CLI wired |
 | 30 | Property tests (precedence/merge) | done | P2 | 8 precedence tests cover intersection, union, min, deny-removes-from-allowed |
 | 31 | DefaultGateEvaluator (deterministic + hysteresis) | done | P3 | gates::evaluator — 6 tests |
 | 32 | Override mechanism (gate bypass + strong audit) | done | P3 | override_gate.rs + cmd_gate --override with reason + approver |
 | 33 | Gate decision records (metrics snapshot) | done | P3 | GateDecisionRecord with metrics_snapshot, criteria_results, metrics_hash |
-| 34 | Atomic state (temp+fsync+rename+lock+state_rev) | done | P3 | state::atomic — 6 tests (create, idempotent, lock, concurrent, drop) |
-| 35 | `amp gate --evaluate` | done | P3 | cmd_gate --evaluate --metrics; writes state + drift + decision record |
+| 34 | Atomic state (temp+fsync+rename+lock+state_rev) | done | P3 | state::atomic — 6 tests (create, idempotent, lock, concurrent, drop); used in CLI gate+elevate |
+| 35 | `amp gate --evaluate` (--json) | done | P3+P5 | --json with criteria diagnostics on no_match; exit 0=transition, 1=no_match |
 | 36 | `amp gate --override` | done | P3 | cmd_gate --override --reason --approver; is_override=true in audit |
 | 37 | `amp status` (--json, --drift) | done | P3 | Phase, autonomy, elevations, last events; --drift shows trend |
 | 38 | Hash-chain audit + signed checkpoints | done | P3 | append_and_verify_chain, checkpoint_create_and_verify, verify_detects_tampering |
-| 39 | `amp audit --verify` | done | P3 | cmd_audit --verify; hash-chain validation |
+| 39 | `amp audit --verify` (--json) | done | P3+P5 | --json output: {valid, entries, audit_path}; exit 0=valid, 1=invalid |
 | 40 | Drift ledger (hash-chain) | done | P3 | append_drift + read_drift_entries + verify_drift_chain |
 | 41 | Trust decay | done | P3 | trust_decay_auto_demotes |
 | 42 | Concurrency tests (lock+idempotency) | done | P3 | concurrent_writers_with_lock, advisory_lock_blocks_concurrent, advisory_lock_drop_releases |
@@ -54,16 +54,16 @@ Status legend: `done` = implemented + tested, `partial` = implemented but incomp
 | 48 | `amp prompt` with authority/gates | done | P4 | v10_prompt_includes_authority_and_gates, golden_prompt_contains_all_sections |
 | 49 | `amp export` (--to aieos/zeroclaw) | done | P4 | export_aieos + export_zeroclaw (26 tests) + CLI wired |
 | 50 | `amp fleet` (--status/--check/--apply) | done | P4 | cmd_fleet --status/--check/--json/--apply-overlay |
-| 51 | Fuzz tests (parse/migrate/import) | not_started | P4 | |
-| 52 | zeroclaw integration | partial | P5 | Converter done (import/export + 12 tests); runtime integration TBD |
-| 53 | agent_mail integration | not_started | P5 | |
-| 54 | odoov19 integration | not_started | P5 | |
-| 55 | Consumer conformance tests | not_started | P5 | |
+| 51 | Fuzz tests (parse/migrate/import/export/compose) | done | P5 | 7 fuzz targets: fuzz_parse, fuzz_check, fuzz_migrate, fuzz_import_aieos, fuzz_import_zeroclaw, fuzz_export_zeroclaw, fuzz_compose |
+| 52 | zeroclaw integration | done | P5 | Converter (import/export + 12 tests) + example persona + integration script + conformance tests |
+| 53 | agent_mail integration | done | P5 | Example persona + `amp register --rpc` MCP payload + integration script + conformance tests |
+| 54 | odoov19 integration | done | P5 | Example persona with compliance_ref deny entries + F1→F4 gates + integration script + conformance tests |
+| 55 | Consumer conformance tests | done | P5 | 23 conformance tests: validation(3), authority(7), gate(3), import/export(3), register(2), audit(1), edge cases(3), E2E lifecycle(1) |
 
 ## Summary
 
-- **done:** 49 / 55
-- **partial:** 2 / 55 (workspace defaults, zeroclaw runtime)
-- **not_started:** 4 / 55 (contract versioning, fuzz tests, agent_mail, odoov19, conformance)
-- **Total tests:** 82 across 4 crates (core: 12, engine: 57, sign: 3, amp integration: 10)
-- **Phases 0a–4 complete.** Phase 5 (consumer integration) pending.
+- **done:** 54 / 55
+- **partial:** 1 / 55 (workspace defaults — functional but no integration-level tests)
+- **not_started:** 0 / 55
+- **Total tests:** 108 across 4 crates (core: 14, engine: 58, sign: 3, amp: 33 integration)
+- **Phases 0a–5 complete.** All consumer integration hardening done.

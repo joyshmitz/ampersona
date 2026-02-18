@@ -282,6 +282,7 @@ mod tests {
             scope: None,
             limits: None,
             scoped_actions: HashMap::new(),
+            deny_metadata: HashMap::new(),
         }
     }
 
@@ -363,6 +364,7 @@ mod tests {
             scope: None,
             limits: None,
             scoped_actions: scoped,
+            deny_metadata: HashMap::new(),
         };
         let mut ctx = HashMap::new();
         ctx.insert(
@@ -400,6 +402,7 @@ mod tests {
             scope: None,
             limits: None,
             scoped_actions: scoped,
+            deny_metadata: HashMap::new(),
         };
         let mut ctx = HashMap::new();
         ctx.insert(
@@ -434,6 +437,7 @@ mod tests {
             scope: None,
             limits: None,
             scoped_actions: scoped,
+            deny_metadata: HashMap::new(),
         };
         let mut ctx = HashMap::new();
         ctx.insert(
@@ -472,6 +476,7 @@ mod tests {
             scope: None,
             limits: None,
             scoped_actions: scoped,
+            deny_metadata: HashMap::new(),
         };
         let mut ctx = HashMap::new();
         ctx.insert(
