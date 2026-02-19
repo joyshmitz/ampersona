@@ -853,6 +853,392 @@ fn quorum_gate_deferred_error() {
     assert_eq!(result["decision"], "error_quorum_not_supported");
 }
 
+/// Approving the wrong gate_id must be a hard error with no side effects.
+#[test]
+fn approve_wrong_gate_id_hard_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_metrics.json"),
+        &metrics_path,
+    )
+    .unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    // Step 1: onboarding (null → active)
+    let out = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "onboarding should succeed");
+
+    // Step 2: trusted gate → pending_human (exit 2)
+    let out = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+
+    // Capture state_rev before bad approve
+    let status_before = amp_bin()
+        .args(["status", persona, "--json"])
+        .output()
+        .unwrap();
+    let before: serde_json::Value = serde_json::from_slice(&status_before.stdout).unwrap();
+    let rev_before = before["state_rev"].as_u64().unwrap();
+
+    // Step 3: approve wrong gate_id → must fail
+    let out = amp_bin()
+        .args(["gate", persona, "--approve", "nonexistent_gate"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "approving wrong gate_id must fail, stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Step 4: state must be unchanged (no side effects)
+    let status_after = amp_bin()
+        .args(["status", persona, "--json"])
+        .output()
+        .unwrap();
+    let after: serde_json::Value = serde_json::from_slice(&status_after.stdout).unwrap();
+    assert_eq!(
+        after["state_rev"].as_u64().unwrap(),
+        rev_before,
+        "state_rev must not change on failed approve"
+    );
+    assert_eq!(
+        after["phase"], before["phase"],
+        "phase must not change on failed approve"
+    );
+}
+
+/// Pending transition does not set last_transition — idempotency triple stays intact.
+#[test]
+fn pending_does_not_set_last_transition() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_metrics.json"),
+        &metrics_path,
+    )
+    .unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    // onboarding: null → active (sets last_transition to onboarding)
+    let _ = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+
+    // Read state: last_transition should be onboarding
+    let state_path = dir.path().join("agent.state.json");
+    let state1: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert_eq!(
+        state1["last_transition"]["gate_id"], "onboarding",
+        "last_transition should be onboarding after first gate"
+    );
+
+    // pending_human: trusted gate → exit 2
+    let out = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+
+    // Read state again: last_transition MUST still be onboarding (not trusted)
+    let state2: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert_eq!(
+        state2["last_transition"]["gate_id"], "onboarding",
+        "pending_human must NOT overwrite last_transition"
+    );
+    assert!(
+        state2["pending_transition"].is_object(),
+        "pending_transition must be set"
+    );
+    assert_eq!(state2["pending_transition"]["gate_id"], "trusted");
+}
+
+/// state_rev increments deterministically: evaluate(+1), approve(+1).
+#[test]
+fn state_rev_monotonic_through_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_metrics.json"),
+        &metrics_path,
+    )
+    .unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    let get_rev = || -> u64 {
+        let out = amp_bin()
+            .args(["status", persona, "--json"])
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["state_rev"].as_u64().unwrap_or(0)
+    };
+
+    // Before any gate: state_rev = 0 (no state file yet, status returns null)
+    // After onboarding: state_rev should be 1
+    let _ = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let rev1 = get_rev();
+    assert_eq!(rev1, 1, "state_rev should be 1 after onboarding");
+
+    // After pending_human: state_rev stays 1 (no transition applied)
+    // But pending_transition is stored — implementation may or may not bump.
+    // Key invariant: it must NOT go backwards.
+    let _ = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let rev2 = get_rev();
+    assert!(
+        rev2 >= rev1,
+        "state_rev must never decrease: {rev2} < {rev1}"
+    );
+
+    // After approve: state_rev must increment
+    let _ = amp_bin()
+        .args(["gate", persona, "--approve", "trusted"])
+        .output()
+        .unwrap();
+    let rev3 = get_rev();
+    assert!(
+        rev3 > rev2,
+        "state_rev must increase after approve: {rev3} <= {rev2}"
+    );
+}
+
+/// Signed checkpoint: wrong verify key must reject.
+#[test]
+fn signed_checkpoint_wrong_key_rejects() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_metrics.json"),
+        &metrics_path,
+    )
+    .unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    // Generate a gate transition to create audit entries
+    let _ = amp_bin()
+        .args(["gate", persona, "--evaluate", "*", "--metrics", metrics])
+        .output()
+        .unwrap();
+
+    // Create signing key (32 bytes)
+    let sign_key_path = dir.path().join("sign.key");
+    let wrong_key_path = dir.path().join("wrong.key");
+    std::fs::write(&sign_key_path, [0xAAu8; 32]).unwrap();
+    std::fs::write(&wrong_key_path, [0xBBu8; 32]).unwrap();
+
+    // Derive pubkey from wrong key (different from sign key)
+    let wrong_signing = ed25519_dalek::SigningKey::from_bytes(&[0xBBu8; 32]);
+    let wrong_pub = wrong_signing.verifying_key();
+    let wrong_pub_path = dir.path().join("wrong.pub");
+    std::fs::write(&wrong_pub_path, wrong_pub.as_bytes()).unwrap();
+
+    // Create signed checkpoint
+    let cp_path = dir.path().join("agent.checkpoint.json");
+    let out = amp_bin()
+        .args([
+            "audit",
+            persona,
+            "--checkpoint-create",
+            "--checkpoint",
+            cp_path.to_str().unwrap(),
+            "--sign-key",
+            sign_key_path.to_str().unwrap(),
+            "--sign-key-id",
+            "test-key",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "checkpoint create should succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Verify with wrong pubkey → must fail (exit 1)
+    let out = amp_bin()
+        .args([
+            "audit",
+            persona,
+            "--checkpoint-verify",
+            "--checkpoint",
+            cp_path.to_str().unwrap(),
+            "--verify-key",
+            wrong_pub_path.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "wrong verify key must reject, stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(result["valid"], false);
+}
+
+/// Checkpoint verify with --verify-key on unsigned checkpoint must error.
+#[test]
+fn checkpoint_missing_signature_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_metrics.json"),
+        &metrics_path,
+    )
+    .unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    // Create audit entry
+    let _ = amp_bin()
+        .args(["gate", persona, "--evaluate", "*", "--metrics", metrics])
+        .output()
+        .unwrap();
+
+    // Create unsigned checkpoint
+    let cp_path = dir.path().join("agent.checkpoint.json");
+    let out = amp_bin()
+        .args([
+            "audit",
+            persona,
+            "--checkpoint-create",
+            "--checkpoint",
+            cp_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    // Try to verify signature on unsigned checkpoint → error
+    let dummy_key_path = dir.path().join("dummy.pub");
+    let dummy_signing = ed25519_dalek::SigningKey::from_bytes(&[0xCCu8; 32]);
+    let dummy_pub = dummy_signing.verifying_key();
+    std::fs::write(&dummy_key_path, dummy_pub.as_bytes()).unwrap();
+
+    let out = amp_bin()
+        .args([
+            "audit",
+            persona,
+            "--checkpoint-verify",
+            "--checkpoint",
+            cp_path.to_str().unwrap(),
+            "--verify-key",
+            dummy_key_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    // Must fail — unsigned checkpoint has no signature field
+    assert!(
+        !out.status.success(),
+        "verifying unsigned checkpoint must fail"
+    );
+}
+
 /// Audit chain stays valid through a full pending/approve lifecycle.
 #[test]
 fn audit_valid_after_pending_approve_lifecycle() {

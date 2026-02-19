@@ -1114,6 +1114,115 @@ mod tests {
     }
 
     #[test]
+    fn import_export_deterministic_no_policy_drift() {
+        // Full roundtrip: import → export → re-import → compare key policy fields.
+        // Ensures no silent drift in authority semantics.
+        let zc = serde_json::json!({
+            "name": "DriftCheck",
+            "identity": { "role": "auditor" },
+            "security_policy": {
+                "autonomy": "supervised",
+                "workspace_only": true,
+                "allowed_paths": ["src/**"],
+                "forbidden_paths": ["/etc/**"],
+                "allowed_commands": ["cargo", "git"],
+                "block_high_risk_commands": true,
+                "max_actions_per_hour": 100,
+                "max_cost_per_day_cents": 500,
+                "sandbox": "landlock",
+                "pairing_required": true
+            }
+        });
+
+        let imported = import_zeroclaw(&zc).unwrap();
+        let exported = export_zeroclaw(&imported).unwrap();
+        let reimported = import_zeroclaw(&exported).unwrap();
+
+        // Authority fields must be identical after roundtrip
+        assert_eq!(
+            imported["authority"]["autonomy"], reimported["authority"]["autonomy"],
+            "autonomy drifted"
+        );
+        assert_eq!(
+            imported["authority"]["scope"], reimported["authority"]["scope"],
+            "scope drifted"
+        );
+        assert_eq!(
+            imported["authority"]["limits"], reimported["authority"]["limits"],
+            "limits drifted"
+        );
+        assert_eq!(
+            imported["authority"]["ext"]["zeroclaw"]["sandbox"],
+            reimported["authority"]["ext"]["zeroclaw"]["sandbox"],
+            "ext.zeroclaw.sandbox drifted"
+        );
+        assert_eq!(
+            imported["authority"]["ext"]["zeroclaw"]["pairing_required"],
+            reimported["authority"]["ext"]["zeroclaw"]["pairing_required"],
+            "ext.zeroclaw.pairing_required drifted"
+        );
+        assert_eq!(
+            imported["authority"]["actions"]["scoped"]["shell"]["commands"],
+            reimported["authority"]["actions"]["scoped"]["shell"]["commands"],
+            "shell commands drifted"
+        );
+    }
+
+    #[test]
+    fn unknown_fields_ignored_on_import() {
+        // Extra unknown fields in ZeroClaw input must not propagate into persona.
+        let zc = serde_json::json!({
+            "name": "Bot",
+            "identity": { "role": "test" },
+            "security_policy": { "autonomy": "supervised" },
+            "unknown_top_level": "should_be_ignored",
+            "another_unknown": { "nested": true },
+            "security_policy_extra": "also_ignored"
+        });
+
+        let persona = import_zeroclaw(&zc).unwrap();
+
+        // Known fields present
+        assert_eq!(persona["name"], "Bot");
+        assert_eq!(persona["authority"]["autonomy"], "supervised");
+
+        // Unknown fields must NOT appear
+        assert!(
+            persona.get("unknown_top_level").is_none(),
+            "unknown_top_level leaked into persona"
+        );
+        assert!(
+            persona.get("another_unknown").is_none(),
+            "another_unknown leaked into persona"
+        );
+        assert!(
+            persona.get("security_policy_extra").is_none(),
+            "security_policy_extra leaked into persona"
+        );
+
+        // Verify persona only has expected top-level keys
+        let obj = persona.as_object().unwrap();
+        for key in obj.keys() {
+            let valid = [
+                "version",
+                "name",
+                "role",
+                "backstory",
+                "psychology",
+                "voice",
+                "capabilities",
+                "directives",
+                "authority",
+            ];
+            assert!(
+                valid.contains(&key.as_str()),
+                "unexpected key '{}' in imported persona",
+                key
+            );
+        }
+    }
+
+    #[test]
     fn export_roundtrip_authority_limits_and_ext() {
         let persona = serde_json::json!({
             "version": "1.0",

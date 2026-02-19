@@ -1,5 +1,11 @@
 # ampersona — Specification v1.0
 
+## Scope
+
+**Goal:** Deterministic policy engine, trust gates, and audit infrastructure for AI agent identities. ampersona owns the authority/gates/audit runtime contract and exposes it via a CLI (`amp`) and Rust crate API.
+
+**Non-goals:** ampersona does not perform transport, event-source orchestration, scheduling, or peripheral management. Those responsibilities belong to the runtime that consumes ampersona (e.g., zeroclaw handles MQTT/webhook/cron fan-in and orchestration; mcp_agent_mail handles message routing). The boundary is: ampersona evaluates policy and gates deterministically given inputs; the caller is responsible for sourcing those inputs.
+
 ## Schema Version
 
 - **Current:** `1.0`
@@ -388,6 +394,7 @@ PhaseState {
   state_rev: integer (monotonic),
   active_elevations: ActiveElevation[],
   last_transition: TransitionRecord | null,
+  pending_transition: PendingTransition | null,
   updated_at: ISO8601 datetime
 }
 
@@ -404,7 +411,19 @@ TransitionRecord {
   from_phase: string | null,
   to_phase: string,
   at: ISO8601 datetime,
-  decision_id: string
+  decision_id: string,
+  metrics_hash: string | null,
+  state_rev: integer
+}
+
+PendingTransition {
+  gate_id: string,
+  from_phase: string | null,
+  to_phase: string,
+  decision: string,
+  metrics_hash: string,
+  state_rev: integer,
+  created_at: ISO8601 datetime
 }
 ```
 

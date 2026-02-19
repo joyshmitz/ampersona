@@ -58,13 +58,14 @@ Status legend: `done` = implemented + tested, `partial` = implemented but incomp
 | 52 | zeroclaw integration | done | P5 | Converter (import/export + 12 tests) + example persona + integration script + conformance tests |
 | 53 | agent_mail integration | done | P5 | Example persona + `amp register --rpc` MCP payload + integration script + conformance tests |
 | 54 | odoov19 integration | done | P5 | Example persona with compliance_ref deny entries + F1→F4 gates + integration script + conformance tests |
-| 55 | Consumer conformance tests | done | P5 | 25 conformance tests: validation(3), authority(7), workspace defaults(2), gate(3), import/export(3), register(2), audit(1), edge cases(3), E2E lifecycle(1) |
+| 55 | Consumer conformance tests | done | P5 | 34 conformance tests: validation(3), authority(7), workspace defaults(2), gate(3), import/export(3), register(2), audit(1), edge cases(3), E2E lifecycle(1), spec-runtime(4), boundary hardening(5) |
 
 ## Summary
 
 - **done:** 55 / 55
 - **partial:** 0 / 55
 - **not_started:** 0 / 55
-- **Total tests:** 119 across 4 crates (core: 14, engine: 63, sign: 3, amp: 39 integration)
+- **Total tests:** 129 across 4 crates (core: 14, engine: 68, sign: 3, amp: 44 integration)
 - **Phases 0a–5 complete.** All consumer integration hardening done.
-- **Note:** Quorum gate approval deferred to v1.1 (returns explicit error). Human gates use pending/approve flow.
+- **Scope:** ampersona owns deterministic policy/gates/audit. Transport, event-source orchestration, and scheduling are out of scope (see SPEC.md § Scope).
+- **Deferred:** Quorum gate approval deferred to v1.1 (returns explicit `error_quorum_not_supported`, exit 1). Human gates use pending/approve flow.

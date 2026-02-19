@@ -241,4 +241,59 @@ mod tests {
         let result = verify_chain(&path);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn tampered_checkpoint_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let audit_path = dir.path().join("test.audit.jsonl");
+        let checkpoint_path = dir.path().join("test.checkpoint.json");
+        let audit_str = audit_path.to_str().unwrap();
+        let checkpoint_str = checkpoint_path.to_str().unwrap();
+
+        append_audit(audit_str, &serde_json::json!({"event": "a"})).unwrap();
+        append_audit(audit_str, &serde_json::json!({"event": "b"})).unwrap();
+
+        create_checkpoint(audit_str, checkpoint_str).unwrap();
+
+        // Tamper with checkpoint: change entry count
+        let content = std::fs::read_to_string(checkpoint_str).unwrap();
+        let tampered = content.replace("\"entries\": 2", "\"entries\": 99");
+        std::fs::write(checkpoint_str, tampered).unwrap();
+
+        // verify_checkpoint must return false (not Ok(true))
+        assert!(!verify_checkpoint(audit_str, checkpoint_str).unwrap());
+    }
+
+    #[test]
+    fn tampered_checkpoint_chain_head_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let audit_path = dir.path().join("test.audit.jsonl");
+        let checkpoint_path = dir.path().join("test.checkpoint.json");
+        let audit_str = audit_path.to_str().unwrap();
+        let checkpoint_str = checkpoint_path.to_str().unwrap();
+
+        append_audit(audit_str, &serde_json::json!({"event": "a"})).unwrap();
+
+        create_checkpoint(audit_str, checkpoint_str).unwrap();
+
+        // Tamper with checkpoint: change chain_head
+        let content = std::fs::read_to_string(checkpoint_str).unwrap();
+        let mut cp: serde_json::Value = serde_json::from_str(&content).unwrap();
+        cp["chain_head"] = serde_json::json!(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        std::fs::write(checkpoint_str, serde_json::to_string_pretty(&cp).unwrap()).unwrap();
+
+        assert!(!verify_checkpoint(audit_str, checkpoint_str).unwrap());
+    }
+
+    #[test]
+    fn verify_chain_empty_file_is_zero_entries() {
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().to_str().unwrap().to_string();
+        std::fs::write(&path, "").unwrap();
+
+        let count = verify_chain(&path).unwrap();
+        assert_eq!(count, 0);
+    }
 }
