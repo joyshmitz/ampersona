@@ -903,13 +903,21 @@ fn approve_wrong_gate_id_hard_error() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
 
-    // Capture state_rev before bad approve
-    let status_before = amp_bin()
-        .args(["status", persona, "--json"])
-        .output()
-        .unwrap();
-    let before: serde_json::Value = serde_json::from_slice(&status_before.stdout).unwrap();
-    let rev_before = before["state_rev"].as_u64().unwrap();
+    // Capture full state + audit count before bad approve
+    let state_path = dir.path().join("agent.state.json");
+    let state_before: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    let rev_before = state_before["state_rev"].as_u64().unwrap();
+    let audit_path = dir.path().join("agent.audit.jsonl");
+    let audit_count_before = if audit_path.exists() {
+        std::fs::read_to_string(&audit_path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count()
+    } else {
+        0
+    };
 
     // Step 3: approve wrong gate_id → must fail
     let out = amp_bin()
@@ -921,21 +929,43 @@ fn approve_wrong_gate_id_hard_error() {
         "approving wrong gate_id must fail, stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
+    // Verify the error message is about gate mismatch (not some other failure)
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("pending gate is") || stderr.contains("not 'nonexistent_gate'"),
+        "error should reference gate mismatch, got: {stderr}"
+    );
 
-    // Step 4: state must be unchanged (no side effects)
-    let status_after = amp_bin()
-        .args(["status", persona, "--json"])
-        .output()
-        .unwrap();
-    let after: serde_json::Value = serde_json::from_slice(&status_after.stdout).unwrap();
+    // Step 4: full state must be unchanged (zero side effects)
+    let state_after: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
     assert_eq!(
-        after["state_rev"].as_u64().unwrap(),
+        state_after["state_rev"].as_u64().unwrap(),
         rev_before,
         "state_rev must not change on failed approve"
     );
     assert_eq!(
-        after["phase"], before["phase"],
+        state_after["current_phase"], state_before["current_phase"],
         "phase must not change on failed approve"
+    );
+    assert_eq!(
+        state_after["pending_transition"], state_before["pending_transition"],
+        "pending_transition must not change on failed approve"
+    );
+
+    // Audit count must not change
+    let audit_count_after = if audit_path.exists() {
+        std::fs::read_to_string(&audit_path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count()
+    } else {
+        0
+    };
+    assert_eq!(
+        audit_count_after, audit_count_before,
+        "audit log must not gain entries on failed approve"
     );
 }
 
@@ -1057,9 +1087,8 @@ fn state_rev_monotonic_through_lifecycle() {
     let rev1 = get_rev();
     assert_eq!(rev1, 1, "state_rev should be 1 after onboarding");
 
-    // After pending_human: state_rev stays 1 (no transition applied)
-    // But pending_transition is stored — implementation may or may not bump.
-    // Key invariant: it must NOT go backwards.
+    // After pending_human: state_rev must stay exactly 1.
+    // pending_human does NOT apply a transition — no state_rev increment.
     let _ = amp_bin()
         .args([
             "gate",
@@ -1073,9 +1102,9 @@ fn state_rev_monotonic_through_lifecycle() {
         .output()
         .unwrap();
     let rev2 = get_rev();
-    assert!(
-        rev2 >= rev1,
-        "state_rev must never decrease: {rev2} < {rev1}"
+    assert_eq!(
+        rev2, rev1,
+        "state_rev must not change on pending_human (no transition applied): got {rev2}, expected {rev1}"
     );
 
     // After approve: state_rev must increment
@@ -1236,6 +1265,12 @@ fn checkpoint_missing_signature_errors() {
     assert!(
         !out.status.success(),
         "verifying unsigned checkpoint must fail"
+    );
+    // Verify the failure is specifically about missing signature (not some other error)
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no signature") || stderr.contains("signature"),
+        "error should reference missing signature, got: {stderr}"
     );
 }
 
