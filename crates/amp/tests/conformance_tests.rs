@@ -622,3 +622,286 @@ fn zeroclaw_full_lifecycle() {
     let entries = audit["entries"].as_u64().unwrap();
     assert!(entries >= 2, "should have at least 2 audit entries");
 }
+
+// ── Spec-Runtime conformance (4) ──────────────────────────────
+
+/// pending_human gate produces exactly one audit entry, not two.
+#[test]
+fn pending_human_no_double_audit() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_metrics.json"),
+        &metrics_path,
+    )
+    .unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    // Step 1: onboarding (null → active) — auto gate
+    let out = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "onboarding should succeed");
+
+    // Step 2: promote to trusted — human gate → exit 2
+    let out = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "human gate should exit 2");
+
+    // Step 3: approve
+    let out = amp_bin()
+        .args(["gate", persona, "--approve", "trusted", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "approve should succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Step 4: audit verify — chain must be valid
+    let out = amp_bin()
+        .args(["audit", persona, "--verify", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let audit: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(audit["valid"], true);
+
+    // Count entries: expect exactly 3 (onboarding + pending_human + approved)
+    let entries = audit["entries"].as_u64().unwrap();
+    assert_eq!(
+        entries, 3,
+        "expected exactly 3 audit entries (onboarding, pending, approved), got {entries}"
+    );
+}
+
+/// Idempotency: transition fires once, then repeated evaluate doesn't re-fire
+/// for the same phase (gate from_phase no longer matches after transition).
+#[test]
+fn idempotent_evaluate_no_duplicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_metrics.json"),
+        &metrics_path,
+    )
+    .unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    // First evaluate: onboarding fires (null → active)
+    let out = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let r1: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(r1["gate_id"], "onboarding");
+    assert_eq!(r1["decision"], "transition");
+
+    // Second evaluate: "trusted" gate is human → exit 2
+    let out = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+
+    // Third evaluate with same state: pending_human fires again (not idempotent
+    // because no transition was applied — pending doesn't set last_transition)
+    let out = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "pending still fires before approval"
+    );
+
+    // Try to evaluate the already-transitioned onboarding gate specifically:
+    // from_phase=null but current is now "active" → no match → exit 1
+    let out = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "onboarding",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "onboarding gate should not re-fire after transition"
+    );
+}
+
+/// Quorum gate returns error, does not crash.
+#[test]
+fn quorum_gate_deferred_error() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Copy a real persona and replace its gate with a quorum gate
+    let persona_path = dir.path().join("quorum.json");
+    let src =
+        std::fs::read_to_string(workspace_root().join("examples/zeroclaw_agent.json")).unwrap();
+    let mut persona: serde_json::Value = serde_json::from_str(&src).unwrap();
+    persona["gates"] = serde_json::json!([{
+        "id": "quorum_gate",
+        "direction": "promote",
+        "enforcement": "enforce",
+        "priority": 10,
+        "from_phase": null,
+        "to_phase": "active",
+        "criteria": [{ "metric": "ready", "op": "eq", "value": true }],
+        "approval": "quorum"
+    }]);
+    std::fs::write(
+        &persona_path,
+        serde_json::to_string_pretty(&persona).unwrap(),
+    )
+    .unwrap();
+
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::write(&metrics_path, r#"{"ready": true}"#).unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    let out = amp_bin()
+        .args([
+            "gate",
+            persona,
+            "--evaluate",
+            "*",
+            "--metrics",
+            metrics,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "quorum should exit 1, stderr={}, stdout={}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout),
+    );
+    let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(result["decision"], "error_quorum_not_supported");
+}
+
+/// Audit chain stays valid through a full pending/approve lifecycle.
+#[test]
+fn audit_valid_after_pending_approve_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_metrics.json"),
+        &metrics_path,
+    )
+    .unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    // 1. Onboarding
+    let _ = amp_bin()
+        .args(["gate", persona, "--evaluate", "*", "--metrics", metrics])
+        .output()
+        .unwrap();
+
+    // 2. Pending human
+    let _ = amp_bin()
+        .args(["gate", persona, "--evaluate", "*", "--metrics", metrics])
+        .output()
+        .unwrap();
+
+    // 3. Approve
+    let _ = amp_bin()
+        .args(["gate", persona, "--approve", "trusted"])
+        .output()
+        .unwrap();
+
+    // 4. Verify chain integrity with --from 0
+    let out = amp_bin()
+        .args(["audit", persona, "--verify", "--from", "0", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "audit verify should pass: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let audit: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(audit["valid"], true);
+    assert!(audit["entries"].as_u64().unwrap() >= 3);
+}

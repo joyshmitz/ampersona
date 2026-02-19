@@ -381,16 +381,16 @@ fn main() {
             approver,
             approve,
             json,
-        } => cmd_gate(
-            &file,
+        } => cmd_gate(GateOpts {
+            file,
             evaluate,
-            metrics,
+            metrics_file: metrics,
             override_gate,
             reason,
             approver,
             approve,
-            json,
-        ),
+            json_out: json,
+        }),
 
         Cmd::Audit {
             file,
@@ -403,18 +403,18 @@ fn main() {
             sign_key_id,
             verify_key,
             json,
-        } => cmd_audit(
-            &file,
+        } => cmd_audit(AuditOpts {
+            file,
             verify,
             from,
             checkpoint_create,
             checkpoint_verify,
-            checkpoint.as_deref(),
-            sign_key.as_deref(),
-            &sign_key_id,
-            verify_key.as_deref(),
-            json,
-        ),
+            checkpoint_path: checkpoint,
+            sign_key,
+            sign_key_id,
+            verify_key,
+            json_out: json,
+        }),
 
         other => match run_other(other) {
             Ok(()) => CmdExit::Ok,
@@ -964,8 +964,8 @@ fn cmd_elevate(file: &str, elevation_id: &str, reason: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_gate(
-    file: &str,
+struct GateOpts {
+    file: String,
     evaluate: Option<String>,
     metrics_file: Option<String>,
     override_gate: Option<String>,
@@ -973,17 +973,11 @@ fn cmd_gate(
     approver: Option<String>,
     approve: Option<String>,
     json_out: bool,
-) -> CmdExit {
-    match cmd_gate_inner(
-        file,
-        evaluate,
-        metrics_file,
-        override_gate,
-        reason,
-        approver,
-        approve,
-        json_out,
-    ) {
+}
+
+fn cmd_gate(opts: GateOpts) -> CmdExit {
+    let json_out = opts.json_out;
+    match cmd_gate_inner(opts) {
         Ok(exit) => exit,
         Err(e) => CmdExit::JsonErr {
             code: "E_INTERNAL",
@@ -993,16 +987,17 @@ fn cmd_gate(
     }
 }
 
-fn cmd_gate_inner(
-    file: &str,
-    evaluate: Option<String>,
-    metrics_file: Option<String>,
-    override_gate: Option<String>,
-    reason: Option<String>,
-    approver: Option<String>,
-    approve: Option<String>,
-    json_out: bool,
-) -> Result<CmdExit> {
+fn cmd_gate_inner(opts: GateOpts) -> Result<CmdExit> {
+    let GateOpts {
+        ref file,
+        evaluate,
+        metrics_file,
+        override_gate,
+        reason,
+        approver,
+        approve,
+        json_out,
+    } = opts;
     let data = read_persona(file)?;
     let persona: ampersona_core::spec::Persona = serde_json::from_value(data)?;
 
@@ -1019,10 +1014,7 @@ fn cmd_gate_inner(
             .ok_or_else(|| anyhow::anyhow!("no pending transition"))?;
 
         if pending.gate_id != gate_id {
-            bail!(
-                "pending gate is '{}', not '{gate_id}'",
-                pending.gate_id
-            );
+            bail!("pending gate is '{}', not '{gate_id}'", pending.gate_id);
         }
 
         // Apply the pending transition
@@ -1041,6 +1033,7 @@ fn cmd_gate_inner(
             at: chrono::Utc::now(),
             decision_id: format!("gate-{}", state.state_rev),
             metrics_hash: Some(metrics_hash.clone()),
+            state_rev: state.state_rev,
         });
         state.pending_transition = None;
 
@@ -1108,8 +1101,7 @@ fn cmd_gate_inner(
 
         // Criteria check: if metrics provided, criteria must be failing
         if let Some(ref mf) = metrics_file {
-            let mdata: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(mf)?)?;
+            let mdata: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(mf)?)?;
             struct JsonMetricsOvr(serde_json::Value);
             impl ampersona_core::traits::MetricsProvider for JsonMetricsOvr {
                 fn get_metric(
@@ -1233,7 +1225,7 @@ fn cmd_gate_inner(
 
         if let Some(record) = result {
             if record.gate_id == gate_id || gate_id == "*" {
-                // Audit the gate transition
+                // Build audit entry once; each branch writes it exactly once.
                 let audit_entry = serde_json::json!({
                     "event_type": "GateTransition",
                     "gate_id": record.gate_id,
@@ -1249,19 +1241,21 @@ fn cmd_gate_inner(
                     "metrics_hash": record.metrics_hash,
                 });
 
-                if let Ok(ref w) = writer {
-                    w.maybe_audit(
-                        persona.audit.as_ref(),
-                        "GateTransition",
-                        &audit_entry,
-                    )?;
-                } else {
-                    let audit_path = file.replace(".json", ".audit.jsonl");
-                    let _ =
-                        ampersona_engine::state::audit_log::append_audit(&audit_path, &audit_entry);
-                }
+                // Helper: write one audit entry via writer or fallback
+                let do_audit = |w: &Result<ampersona_engine::state::writer::StateWriter, _>,
+                                entry: &serde_json::Value|
+                 -> Result<()> {
+                    if let Ok(ref w) = w {
+                        w.maybe_audit(persona.audit.as_ref(), "GateTransition", entry)?;
+                    } else {
+                        let audit_path = file.replace(".json", ".audit.jsonl");
+                        let _ =
+                            ampersona_engine::state::audit_log::append_audit(&audit_path, entry);
+                    }
+                    Ok(())
+                };
 
-                // Write drift entry
+                // Write drift entry (always, regardless of decision)
                 let drift_path = file.replace(".json", ".drift.jsonl");
                 let _ = ampersona_engine::state::drift::append_drift(
                     &drift_path,
@@ -1270,24 +1264,19 @@ fn cmd_gate_inner(
 
                 // Handle pending_human: write PendingTransition, don't apply
                 if record.decision == "pending_human" {
-                    state.pending_transition =
-                        Some(ampersona_core::state::PendingTransition {
-                            gate_id: record.gate_id.clone(),
-                            from_phase: record.from_phase.clone(),
-                            to_phase: record.to_phase.clone(),
-                            decision: record.decision.clone(),
-                            metrics_hash: record.metrics_hash.clone(),
-                            state_rev: state.state_rev,
-                            created_at: chrono::Utc::now(),
-                        });
+                    state.pending_transition = Some(ampersona_core::state::PendingTransition {
+                        gate_id: record.gate_id.clone(),
+                        from_phase: record.from_phase.clone(),
+                        to_phase: record.to_phase.clone(),
+                        decision: record.decision.clone(),
+                        metrics_hash: record.metrics_hash.clone(),
+                        state_rev: state.state_rev,
+                        created_at: chrono::Utc::now(),
+                    });
                     state.updated_at = chrono::Utc::now();
 
+                    do_audit(&writer, &audit_entry)?;
                     if let Ok(ref w) = writer {
-                        w.maybe_audit(
-                            persona.audit.as_ref(),
-                            "GateTransition",
-                            &audit_entry,
-                        )?;
                         w.write_state(&state)?;
                     } else {
                         let json = serde_json::to_string_pretty(&state)?;
@@ -1311,6 +1300,7 @@ fn cmd_gate_inner(
 
                 // Handle quorum error
                 if record.decision == "error_quorum_not_supported" {
+                    do_audit(&writer, &audit_entry)?;
                     if !json_out {
                         eprintln!(
                             "  error: quorum approval not yet supported (gate {})",
@@ -1334,6 +1324,7 @@ fn cmd_gate_inner(
                         at: chrono::Utc::now(),
                         decision_id: format!("gate-{}", state.state_rev),
                         metrics_hash: Some(record.metrics_hash.clone()),
+                        state_rev: state.state_rev,
                     });
                     // Clear any pending transition since we're applying now
                     state.pending_transition = None;
@@ -1353,6 +1344,7 @@ fn cmd_gate_inner(
                         }
                     }
 
+                    do_audit(&writer, &audit_entry)?;
                     if let Ok(ref w) = writer {
                         w.write_state(&state)?;
                     } else {
@@ -1369,12 +1361,15 @@ fn cmd_gate_inner(
                             record.to_phase
                         );
                     }
-                } else if record.decision == "observed" && !json_out {
-                    eprintln!(
-                        "  observed (not applied): {} \u{2192} {}",
-                        record.from_phase.as_deref().unwrap_or("none"),
-                        record.to_phase
-                    );
+                } else if record.decision == "observed" {
+                    do_audit(&writer, &audit_entry)?;
+                    if !json_out {
+                        eprintln!(
+                            "  observed (not applied): {} \u{2192} {}",
+                            record.from_phase.as_deref().unwrap_or("none"),
+                            record.to_phase
+                        );
+                    }
                 }
                 println!("{}", serde_json::to_string_pretty(&record)?);
                 return Ok(CmdExit::Ok);
@@ -1517,33 +1512,45 @@ fn cmd_verify(file: &str, pubkey_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_audit(
-    file: &str,
+struct AuditOpts {
+    file: String,
     verify: bool,
     from: Option<u64>,
     checkpoint_create: bool,
     checkpoint_verify: bool,
-    checkpoint_path: Option<&str>,
-    sign_key: Option<&str>,
-    sign_key_id: &str,
-    verify_key: Option<&str>,
+    checkpoint_path: Option<String>,
+    sign_key: Option<String>,
+    sign_key_id: String,
+    verify_key: Option<String>,
     json_out: bool,
-) -> CmdExit {
+}
+
+fn cmd_audit(opts: AuditOpts) -> CmdExit {
+    let AuditOpts {
+        file,
+        verify,
+        from,
+        checkpoint_create,
+        checkpoint_verify,
+        checkpoint_path,
+        sign_key,
+        sign_key_id,
+        verify_key,
+        json_out,
+    } = opts;
     let audit_path = file.replace(".json", ".audit.jsonl");
 
     // Handle checkpoint create
     if checkpoint_create {
-        let cp_path = checkpoint_path
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| file.replace(".json", ".checkpoint.json"));
+        let cp_path = checkpoint_path.unwrap_or_else(|| file.replace(".json", ".checkpoint.json"));
         if !std::path::Path::new(&audit_path).exists() {
             return CmdExit::Err(anyhow::anyhow!("no audit log at {audit_path}"));
         }
         match ampersona_engine::state::audit_log::create_checkpoint(&audit_path, &cp_path) {
             Ok(mut checkpoint) => {
                 // Optionally sign the checkpoint
-                if let Some(key_path) = sign_key {
-                    match sign_checkpoint(&mut checkpoint, key_path, sign_key_id) {
+                if let Some(ref key_path) = sign_key {
+                    match sign_checkpoint(&mut checkpoint, key_path, &sign_key_id) {
                         Ok(()) => {
                             // Re-write with signature
                             let json = serde_json::to_string_pretty(&checkpoint).unwrap();
@@ -1567,9 +1574,7 @@ fn cmd_audit(
 
     // Handle checkpoint verify
     if checkpoint_verify {
-        let cp_path = checkpoint_path
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| file.replace(".json", ".checkpoint.json"));
+        let cp_path = checkpoint_path.unwrap_or_else(|| file.replace(".json", ".checkpoint.json"));
         if !std::path::Path::new(&audit_path).exists() {
             return CmdExit::Err(anyhow::anyhow!("no audit log at {audit_path}"));
         }
@@ -1578,7 +1583,7 @@ fn cmd_audit(
         }
 
         // Verify signature if public key provided
-        if let Some(pubkey_path) = verify_key {
+        if let Some(ref pubkey_path) = verify_key {
             match verify_checkpoint_signature(&cp_path, pubkey_path) {
                 Ok(true) => {
                     if !json_out {
@@ -1691,11 +1696,7 @@ fn cmd_audit(
 }
 
 /// Sign a checkpoint JSON value with ed25519.
-fn sign_checkpoint(
-    checkpoint: &mut serde_json::Value,
-    key_path: &str,
-    key_id: &str,
-) -> Result<()> {
+fn sign_checkpoint(checkpoint: &mut serde_json::Value, key_path: &str, key_id: &str) -> Result<()> {
     let key_bytes =
         std::fs::read(key_path).map_err(|e| anyhow::anyhow!("cannot read key {key_path}: {e}"))?;
     let key_array: [u8; 32] = key_bytes

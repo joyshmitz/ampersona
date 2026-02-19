@@ -72,9 +72,8 @@ impl DefaultGateEvaluator {
                 if let Some(last) = &state.last_transition {
                     if last.gate_id == gate.id
                         && last.metrics_hash.as_deref() == Some(&metrics_hash)
-                        && state.state_rev == last.metrics_hash.as_ref().map(|_| state.state_rev).unwrap_or(0)
+                        && last.state_rev == state.state_rev
                     {
-                        // Same gate with same metrics already transitioned at this state_rev
                         continue;
                     }
                 }
@@ -338,6 +337,7 @@ mod tests {
                 at: Utc::now() - Duration::hours(1), // only 1h ago
                 decision_id: "gate-1".into(),
                 metrics_hash: None,
+                state_rev: 0,
             }),
             pending_transition: None,
             updated_at: Utc::now(),
@@ -452,6 +452,7 @@ mod tests {
                 at: Utc::now() - Duration::days(30), // promoted 30 days ago
                 decision_id: "gate-4".into(),
                 metrics_hash: None,
+                state_rev: 0,
             }),
             pending_transition: None,
             updated_at: Utc::now(),
@@ -508,5 +509,86 @@ mod tests {
         let evaluator = DefaultGateEvaluator;
         let result = evaluator.evaluate(&gates, &state, &metrics);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn idempotency_skips_duplicate_transition() {
+        // First evaluation fires the gate
+        let gates = vec![make_gate(
+            "promote",
+            GateDirection::Promote,
+            "active",
+            "trusted",
+            vec![Criterion {
+                metric: "score".into(),
+                op: CriterionOp::Gte,
+                value: serde_json::json!(10),
+            }],
+        )];
+
+        let mut metrics_map = HashMap::new();
+        metrics_map.insert("score".into(), serde_json::json!(15));
+        let metrics = TestMetrics(metrics_map);
+
+        let evaluator = DefaultGateEvaluator;
+
+        // First eval: should fire
+        let state = PhaseState {
+            name: "test".into(),
+            current_phase: Some("active".into()),
+            state_rev: 1,
+            active_elevations: vec![],
+            last_transition: None,
+            pending_transition: None,
+            updated_at: Utc::now(),
+        };
+        let result = evaluator.evaluate(&gates, &state, &metrics).unwrap();
+        assert_eq!(result.gate_id, "promote");
+        let fired_hash = result.metrics_hash.clone();
+
+        // Second eval: same gate, same metrics_hash, same state_rev → idempotent skip
+        let state2 = PhaseState {
+            name: "test".into(),
+            current_phase: Some("active".into()),
+            state_rev: 1,
+            active_elevations: vec![],
+            last_transition: Some(TransitionRecord {
+                gate_id: "promote".into(),
+                from_phase: Some("active".into()),
+                to_phase: "trusted".into(),
+                at: Utc::now(),
+                decision_id: "gate-1".into(),
+                metrics_hash: Some(fired_hash.clone()),
+                state_rev: 1,
+            }),
+            pending_transition: None,
+            updated_at: Utc::now(),
+        };
+        let result2 = evaluator.evaluate(&gates, &state2, &metrics);
+        assert!(
+            result2.is_none(),
+            "idempotent: same (gate, hash, rev) must skip"
+        );
+
+        // Third eval: same gate, same hash, but state_rev advanced → NOT idempotent
+        let state3 = PhaseState {
+            name: "test".into(),
+            current_phase: Some("active".into()),
+            state_rev: 2,
+            active_elevations: vec![],
+            last_transition: Some(TransitionRecord {
+                gate_id: "promote".into(),
+                from_phase: Some("active".into()),
+                to_phase: "trusted".into(),
+                at: Utc::now(),
+                decision_id: "gate-1".into(),
+                metrics_hash: Some(fired_hash),
+                state_rev: 1,
+            }),
+            pending_transition: None,
+            updated_at: Utc::now(),
+        };
+        let result3 = evaluator.evaluate(&gates, &state3, &metrics);
+        assert!(result3.is_some(), "different state_rev must re-evaluate");
     }
 }

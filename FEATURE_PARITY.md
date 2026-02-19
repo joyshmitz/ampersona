@@ -65,6 +65,6 @@ Status legend: `done` = implemented + tested, `partial` = implemented but incomp
 - **done:** 55 / 55
 - **partial:** 0 / 55
 - **not_started:** 0 / 55
-- **Total tests:** 114 across 4 crates (core: 14, engine: 62, sign: 3, amp: 35 integration)
+- **Total tests:** 119 across 4 crates (core: 14, engine: 63, sign: 3, amp: 39 integration)
 - **Phases 0a–5 complete.** All consumer integration hardening done.
 - **Note:** Quorum gate approval deferred to v1.1 (returns explicit error). Human gates use pending/approve flow.

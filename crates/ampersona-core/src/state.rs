@@ -56,6 +56,9 @@ pub struct TransitionRecord {
     pub decision_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_hash: Option<String>,
+    /// The state_rev at which this transition was recorded (for idempotency).
+    #[serde(default)]
+    pub state_rev: u64,
 }
 
 /// A pending gate transition awaiting human approval.
