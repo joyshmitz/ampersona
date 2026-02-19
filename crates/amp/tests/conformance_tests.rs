@@ -561,7 +561,7 @@ fn zeroclaw_full_lifecycle() {
     let auth: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(auth["decision"], "Allow");
 
-    // 4. Gate: promote to trusted (active → trusted)
+    // 4. Gate: promote to trusted (active → trusted) — human approval required
     let out = amp_bin()
         .args([
             "gate",
@@ -574,10 +574,28 @@ fn zeroclaw_full_lifecycle() {
         ])
         .output()
         .unwrap();
-    assert!(out.status.success());
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "human gate should exit 2 (pending)"
+    );
     let gate2: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(gate2["gate_id"], "trusted");
-    assert_eq!(gate2["to_phase"], "trusted");
+    assert_eq!(gate2["decision"], "pending_human");
+
+    // 4b. Approve the pending transition
+    let out = amp_bin()
+        .args(["gate", persona, "--approve", "trusted", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "approve should succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let approved: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(approved["decision"], "approved");
+    assert_eq!(approved["to_phase"], "trusted");
 
     // 5. Status shows trusted phase
     let out = amp_bin()

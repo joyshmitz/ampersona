@@ -260,6 +260,9 @@ ElevationGrants {
 }
 
 GateApproval = "auto" | "human" | "quorum"
+  - auto: gate fires immediately when criteria pass
+  - human: creates pending transition; requires `amp gate --approve` to apply
+  - quorum: reserved for v1.1 (returns error in v1.0)
 ```
 
 ### Delegation
@@ -500,8 +503,9 @@ Distinct from elevation. Override = emergency bypass of a failed gate.
 | `amp status <file> [--json] [--drift]` | Phase, autonomy, elevations, events, drift |
 | `amp authority <file> --check <action>` | Policy check → Allow/Deny/NeedsApproval |
 | `amp elevate <file> --elevation <id> --reason "..."` | Temporary auth grant |
-| `amp gate <file> --evaluate <gate-id> --metrics <file>` | Gate evaluation |
-| `amp gate <file> --override <gate-id> --reason "..." --approver <id>` | Emergency bypass |
+| `amp gate <file> --evaluate <gate-id> --metrics <file>` | Gate evaluation (exit 0=transition, 1=no_match, 2=pending_human) |
+| `amp gate <file> --approve <gate-id>` | Approve pending human gate |
+| `amp gate <file> --override <gate-id> --reason "..." --approver <id>` | Emergency bypass (requires phase match + criteria failing) |
 | `amp migrate <files...>` | v0.2 → v1.0 upgrade |
 | `amp import <file> --from aieos\|zeroclaw` | Convert external → ampersona |
 | `amp export <file> --to aieos\|zeroclaw-config` | Convert ampersona → external |
@@ -509,7 +513,9 @@ Distinct from elevation. Override = emergency bypass of a failed gate.
 | `amp diff <a> <b>` | Compare personas |
 | `amp sign <file> --key <key> [--key-id <id>]` | Sign persona |
 | `amp verify <file> --pubkey <key>` | Verify signature |
-| `amp audit <file> --verify [--from N]` | Verify hash-chain |
+| `amp audit <file> --verify [--from N]` | Verify hash-chain (from entry N) |
+| `amp audit <file> --checkpoint-create [--checkpoint <path>] [--sign-key <key>]` | Create integrity checkpoint |
+| `amp audit <file> --checkpoint-verify [--checkpoint <path>] [--verify-key <key>]` | Verify checkpoint |
 | `amp fleet <dir> --status` | Fleet summary table |
 | `amp fleet <dir> --check [--json]` | Batch validation |
 | `amp fleet <dir> --apply-overlay <overlay.json>` | Apply authority overlay |

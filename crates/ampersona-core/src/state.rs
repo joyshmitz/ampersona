@@ -11,6 +11,8 @@ pub struct PhaseState {
     pub active_elevations: Vec<ActiveElevation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_transition: Option<TransitionRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_transition: Option<PendingTransition>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -22,6 +24,7 @@ impl PhaseState {
             state_rev: 0,
             active_elevations: Vec::new(),
             last_transition: None,
+            pending_transition: None,
             updated_at: Utc::now(),
         }
     }
@@ -51,6 +54,20 @@ pub struct TransitionRecord {
     pub to_phase: String,
     pub at: DateTime<Utc>,
     pub decision_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_hash: Option<String>,
+}
+
+/// A pending gate transition awaiting human approval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingTransition {
+    pub gate_id: String,
+    pub from_phase: Option<String>,
+    pub to_phase: String,
+    pub decision: String,
+    pub metrics_hash: String,
+    pub state_rev: u64,
+    pub created_at: DateTime<Utc>,
 }
 
 /// A single drift ledger entry.

@@ -45,6 +45,14 @@ pub fn append_audit(path: &str, entry: &serde_json::Value) -> Result<String> {
 ///
 /// Returns the number of valid entries.
 pub fn verify_chain(path: &str) -> Result<u64> {
+    verify_chain_from(path, 0)
+}
+
+/// Verify the hash chain starting from entry `from_entry` (0-based).
+///
+/// Entries before `from_entry` are traversed to build the chain state but not
+/// verified against their prev_hash — this allows verifying a suffix of the chain.
+pub fn verify_chain_from(path: &str, from_entry: u64) -> Result<u64> {
     let content =
         std::fs::read_to_string(path).with_context(|| format!("cannot read audit {path}"))?;
 
@@ -58,18 +66,20 @@ pub fn verify_chain(path: &str) -> Result<u64> {
         let entry: serde_json::Value = serde_json::from_str(line)
             .with_context(|| format!("invalid JSON at line {}", i + 1))?;
 
-        let entry_prev = entry
-            .get("prev_hash")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("genesis");
+        if count >= from_entry {
+            let entry_prev = entry
+                .get("prev_hash")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("genesis");
 
-        if entry_prev != prev_hash {
-            bail!(
-                "hash chain broken at entry {}: expected prev_hash '{}', got '{}'",
-                i + 1,
-                prev_hash,
-                entry_prev
-            );
+            if entry_prev != prev_hash {
+                bail!(
+                    "hash chain broken at entry {}: expected prev_hash '{}', got '{}'",
+                    count,
+                    prev_hash,
+                    entry_prev
+                );
+            }
         }
 
         let entry_json = serde_json::to_string(&entry)?;

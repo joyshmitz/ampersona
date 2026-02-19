@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use ampersona_core::spec::gates::{Criterion, Gate};
 use ampersona_core::state::PhaseState;
 use ampersona_core::traits::{CriteriaResult, MetricQuery, MetricsProvider};
-use ampersona_core::types::{CriterionOp, GateDirection, GateEnforcement};
+use ampersona_core::types::{CriterionOp, GateApproval, GateDirection, GateEnforcement};
 
 use super::decision::GateDecisionRecord;
 
@@ -68,15 +68,49 @@ impl DefaultGateEvaluator {
                 // Compute metrics hash for idempotency
                 let metrics_hash = compute_metrics_hash(&snapshot);
 
+                // Idempotency check: skip if same (gate_id, metrics_hash, state_rev)
+                if let Some(last) = &state.last_transition {
+                    if last.gate_id == gate.id
+                        && last.metrics_hash.as_deref() == Some(&metrics_hash)
+                        && state.state_rev == last.metrics_hash.as_ref().map(|_| state.state_rev).unwrap_or(0)
+                    {
+                        // Same gate with same metrics already transitioned at this state_rev
+                        continue;
+                    }
+                }
+
+                // Handle approval type
+                let decision = match gate.approval {
+                    GateApproval::Human => "pending_human".to_string(),
+                    GateApproval::Quorum => {
+                        return Some(GateDecisionRecord {
+                            gate_id: gate.id.clone(),
+                            direction: gate.direction,
+                            enforcement: gate.enforcement,
+                            decision: "error_quorum_not_supported".to_string(),
+                            from_phase: state.current_phase.clone(),
+                            to_phase: gate.to_phase.clone(),
+                            metrics_snapshot: snapshot,
+                            criteria_results: results,
+                            is_override: false,
+                            state_rev: state.state_rev,
+                            metrics_hash,
+                        });
+                    }
+                    GateApproval::Auto => {
+                        if gate.enforcement == GateEnforcement::Observe {
+                            "observed".to_string()
+                        } else {
+                            "transition".to_string()
+                        }
+                    }
+                };
+
                 return Some(GateDecisionRecord {
                     gate_id: gate.id.clone(),
                     direction: gate.direction,
                     enforcement: gate.enforcement,
-                    decision: if gate.enforcement == GateEnforcement::Observe {
-                        "observed".to_string()
-                    } else {
-                        "transition".to_string()
-                    },
+                    decision,
                     from_phase: state.current_phase.clone(),
                     to_phase: gate.to_phase.clone(),
                     metrics_snapshot: snapshot,
@@ -91,7 +125,7 @@ impl DefaultGateEvaluator {
         None
     }
 
-    fn evaluate_criteria(
+    pub fn evaluate_criteria(
         &self,
         criteria: &[Criterion],
         metrics: &dyn MetricsProvider,
@@ -257,6 +291,7 @@ mod tests {
             state_rev: 1,
             active_elevations: vec![],
             last_transition: None,
+            pending_transition: None,
             updated_at: Utc::now(),
         };
 
@@ -302,7 +337,9 @@ mod tests {
                 to_phase: "trusted".into(),
                 at: Utc::now() - Duration::hours(1), // only 1h ago
                 decision_id: "gate-1".into(),
+                metrics_hash: None,
             }),
+            pending_transition: None,
             updated_at: Utc::now(),
         };
 
@@ -338,6 +375,7 @@ mod tests {
             state_rev: 1,
             active_elevations: vec![],
             last_transition: None,
+            pending_transition: None,
             updated_at: Utc::now(),
         };
 
@@ -413,7 +451,9 @@ mod tests {
                 to_phase: "trusted".into(),
                 at: Utc::now() - Duration::days(30), // promoted 30 days ago
                 decision_id: "gate-4".into(),
+                metrics_hash: None,
             }),
+            pending_transition: None,
             updated_at: Utc::now(),
         };
 
@@ -457,6 +497,7 @@ mod tests {
             state_rev: 1,
             active_elevations: vec![],
             last_transition: None,
+            pending_transition: None,
             updated_at: Utc::now(),
         };
 

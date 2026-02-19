@@ -38,11 +38,11 @@ Status legend: `done` = implemented + tested, `partial` = implemented but incomp
 | 32 | Override mechanism (gate bypass + strong audit) | done | P3 | override_gate.rs + cmd_gate --override with reason + approver |
 | 33 | Gate decision records (metrics snapshot) | done | P3 | GateDecisionRecord with metrics_snapshot, criteria_results, metrics_hash |
 | 34 | Atomic state (temp+fsync+rename+lock+state_rev) | done | P3 | state::atomic — 6 tests (create, idempotent, lock, concurrent, drop); used in CLI gate+elevate |
-| 35 | `amp gate --evaluate` (--json) | done | P3+P5 | --json with criteria diagnostics on no_match; exit 0=transition, 1=no_match |
-| 36 | `amp gate --override` | done | P3 | cmd_gate --override --reason --approver; is_override=true in audit |
+| 35 | `amp gate --evaluate` (--json) | done | P3+P5 | --json with criteria diagnostics on no_match; exit 0=transition, 1=no_match, 2=pending_human |
+| 36 | `amp gate --override` | done | P3 | cmd_gate --override --reason --approver; phase match + criteria-failing validation; is_override=true in audit |
 | 37 | `amp status` (--json, --drift) | done | P3 | Phase, autonomy, elevations, last events; --drift shows trend |
 | 38 | Hash-chain audit + signed checkpoints | done | P3 | append_and_verify_chain, checkpoint_create_and_verify, verify_detects_tampering |
-| 39 | `amp audit --verify` (--json) | done | P3+P5 | --json output: {valid, entries, audit_path}; exit 0=valid, 1=invalid |
+| 39 | `amp audit --verify` (--json) | done | P3+P5 | --json output: {valid, entries, audit_path}; --from N; --checkpoint-create/--checkpoint-verify; signed checkpoints |
 | 40 | Drift ledger (hash-chain) | done | P3 | append_drift + read_drift_entries + verify_drift_chain |
 | 41 | Trust decay | done | P3 | trust_decay_auto_demotes |
 | 42 | Concurrency tests (lock+idempotency) | done | P3 | concurrent_writers_with_lock, advisory_lock_blocks_concurrent, advisory_lock_drop_releases |
@@ -65,5 +65,6 @@ Status legend: `done` = implemented + tested, `partial` = implemented but incomp
 - **done:** 55 / 55
 - **partial:** 0 / 55
 - **not_started:** 0 / 55
-- **Total tests:** 111 across 4 crates (core: 14, engine: 59, sign: 3, amp: 35 integration)
+- **Total tests:** 114 across 4 crates (core: 14, engine: 62, sign: 3, amp: 35 integration)
 - **Phases 0a–5 complete.** All consumer integration hardening done.
+- **Note:** Quorum gate approval deferred to v1.1 (returns explicit error). Human gates use pending/approve flow.
