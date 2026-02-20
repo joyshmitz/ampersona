@@ -8,7 +8,7 @@
 
 ## Current State
 
-**v1.0 complete.** 71 features done, 129 tests green.
+**v1.0 complete.** 55 features done, 129 tests green.
 Platform is spec-correct, domain-agnostic, auditable.
 
 **What v1.0 is not:**
@@ -53,8 +53,9 @@ Full scenario (`phase: null → active → trusted → demote back`) exercisable
 
 **Dependency:** Phase 0 complete.
 
-**Goal:** Close the three mathematical gaps in `THEORY.md`.
+**Goal:** Close Gaps 1–3 from `THEORY.md` (PhaseInvariant, CriteriaLogic, Quorum).
 After this phase, `Inv` is defined, Guard is compositional, Quorum has a protocol.
+Gap 4 (zeroclaw seam) is addressed in Phase 2.
 
 #### 1.1 — ADR-007 + `CriteriaLogic`
 

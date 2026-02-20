@@ -85,21 +85,21 @@ A new domain implements them. The platform changes nothing.
 - Rust 2021 edition, `#![forbid(unsafe_code)]` in every crate
 - **Key deps:** clap 4, serde_json, jsonschema, ed25519-dalek, tru (git dep: `toon_rust`)
 - `cargo fmt --check && cargo clippy -- -D warnings && cargo test --workspace`
-- 71 features done, 129 tests green — this is the baseline
+- 55 features done, 129 tests green — this is the baseline
 
 ### Test Levels
 
 | Level | What | Where |
 |-------|------|-------|
-| Unit | PolicyChecker, GateEvaluator, precedence | `crates/*/src/**/tests.rs` |
-| Integration | CLI e2e | `tests/` workspace root |
+| Unit | PolicyChecker, GateEvaluator, precedence | `crates/*/src/**` (embedded `#[cfg(test)]`) |
+| Integration | CLI e2e | `crates/amp/tests/` |
 | Conformance | spec-runtime contracts, boundary hardening | `crates/amp/tests/conformance_tests.rs` |
-| Backward compat | v0.2 examples | `tests/backward_compat.rs` |
-| Golden | persona → expected prompt | `tests/golden/` |
+| Backward compat | v0.2 examples | `crates/amp/tests/backward_compat.rs` |
+| Golden | persona → expected prompt | `crates/amp/tests/golden/` |
 | Consumer fixtures | per-consumer examples | `examples/*.json` |
-| Property-based | precedence/merge invariants | `tests/property/*.rs` |
+| Property-based | precedence/merge invariants | embedded in `policy/precedence.rs` |
 | Fuzz | parse/migrate/import robustness | `fuzz/` |
-| Concurrency | lock contention + idempotency | `tests/concurrency/*.rs` |
+| Concurrency | lock contention + idempotency | embedded in `state/atomic.rs` |
 
 ---
 
