@@ -42,6 +42,9 @@ pub struct Criterion {
     pub metric: String,
     pub op: CriterionOp,
     pub value: serde_json::Value,
+    /// Optional time window in seconds for windowed metric queries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

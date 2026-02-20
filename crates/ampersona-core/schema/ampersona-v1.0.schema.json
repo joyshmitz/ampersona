@@ -340,7 +340,8 @@
       "properties": {
         "metric": { "type": "string", "minLength": 1 },
         "op": { "type": "string", "enum": ["eq", "neq", "gt", "gte", "lt", "lte"] },
-        "value": {}
+        "value": {},
+        "window_seconds": { "type": "integer", "minimum": 1 }
       }
     },
     "Signature": {

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -147,7 +148,7 @@ impl DefaultGateEvaluator {
         for criterion in criteria {
             let query = MetricQuery {
                 name: criterion.metric.clone(),
-                window: None,
+                window: criterion.window_seconds.map(Duration::from_secs),
             };
 
             let (actual, pass, type_mismatch) = match metrics.get_metric(&query) {
@@ -328,6 +329,7 @@ mod tests {
                 vec![Criterion {
                     metric: "score".into(),
                     op: CriterionOp::Gte,
+                    window_seconds: None,
                     value: serde_json::json!(5),
                 }],
             ),
@@ -339,6 +341,7 @@ mod tests {
                 vec![Criterion {
                     metric: "violations".into(),
                     op: CriterionOp::Gte,
+                    window_seconds: None,
                     value: serde_json::json!(3),
                 }],
             ),
@@ -380,6 +383,7 @@ mod tests {
                 metric: "violations".into(),
                 op: CriterionOp::Gte,
                 value: serde_json::json!(3),
+                window_seconds: None,
             }],
         )];
         // Set cooldown
@@ -427,6 +431,7 @@ mod tests {
                 metric: "score".into(),
                 op: CriterionOp::Gte,
                 value: serde_json::json!(10),
+                window_seconds: None,
             }],
         );
         gate.enforcement = GateEnforcement::Observe;
@@ -481,6 +486,7 @@ mod tests {
                 vec![Criterion {
                     metric: "tasks_completed".into(),
                     op: CriterionOp::Gte,
+                    window_seconds: None,
                     value: serde_json::json!(20),
                 }],
             ),
@@ -493,6 +499,7 @@ mod tests {
                     vec![Criterion {
                         metric: "policy_violations_30d".into(),
                         op: CriterionOp::Gte,
+                        window_seconds: None,
                         value: serde_json::json!(3),
                     }],
                 );
@@ -553,6 +560,7 @@ mod tests {
                 metric: "score".into(),
                 op: CriterionOp::Gte,
                 value: serde_json::json!(100),
+                window_seconds: None,
             }],
         )];
 
@@ -585,6 +593,7 @@ mod tests {
         let criteria = vec![Criterion {
             metric: "temperature".into(),
             op: CriterionOp::Gte,
+            window_seconds: None,
             value: serde_json::json!(100),
         }];
         let mut schema = HashMap::new();
@@ -614,6 +623,7 @@ mod tests {
         let criteria = vec![Criterion {
             metric: "temperature".into(),
             op: CriterionOp::Gte,
+            window_seconds: None,
             value: serde_json::json!(100),
         }];
         let mut schema = HashMap::new();
@@ -643,6 +653,7 @@ mod tests {
         let criteria = vec![Criterion {
             metric: "score".into(),
             op: CriterionOp::Gte,
+            window_seconds: None,
             value: serde_json::json!(10),
         }];
         let mut schema = HashMap::new();
@@ -663,6 +674,50 @@ mod tests {
     }
 
     #[test]
+    fn window_seconds_passed_to_metric_query() {
+        // Verify that criterion.window_seconds propagates to MetricQuery.window
+        use std::time::Duration as StdDuration;
+
+        struct WindowCapture(std::sync::Mutex<Option<Option<StdDuration>>>);
+        impl MetricsProvider for WindowCapture {
+            fn get_metric(&self, query: &MetricQuery) -> Result<MetricSample, MetricError> {
+                *self.0.lock().unwrap() = Some(query.window);
+                Ok(MetricSample {
+                    name: query.name.clone(),
+                    value: serde_json::json!(0.95),
+                    sampled_at: Utc::now(),
+                })
+            }
+        }
+
+        let evaluator = DefaultGateEvaluator;
+
+        // With window_seconds = Some(604800) (7 days)
+        let criteria = vec![Criterion {
+            metric: "sop.completion_rate".into(),
+            op: CriterionOp::Gte,
+            window_seconds: Some(604800),
+            value: serde_json::json!(0.9),
+        }];
+        let capture = WindowCapture(std::sync::Mutex::new(None));
+        evaluator.evaluate_criteria(&criteria, &capture, GateDirection::Promote, None);
+        let captured = capture.0.lock().unwrap().unwrap();
+        assert_eq!(captured, Some(StdDuration::from_secs(604800)));
+
+        // With window_seconds = None
+        let criteria_no_window = vec![Criterion {
+            metric: "sop.completion_rate".into(),
+            op: CriterionOp::Gte,
+            window_seconds: None,
+            value: serde_json::json!(0.9),
+        }];
+        let capture2 = WindowCapture(std::sync::Mutex::new(None));
+        evaluator.evaluate_criteria(&criteria_no_window, &capture2, GateDirection::Promote, None);
+        let captured2 = capture2.0.lock().unwrap().unwrap();
+        assert_eq!(captured2, None);
+    }
+
+    #[test]
     fn idempotency_skips_duplicate_transition() {
         // First evaluation fires the gate
         let gates = vec![make_gate(
@@ -673,6 +728,7 @@ mod tests {
             vec![Criterion {
                 metric: "score".into(),
                 op: CriterionOp::Gte,
+                window_seconds: None,
                 value: serde_json::json!(10),
             }],
         )];
