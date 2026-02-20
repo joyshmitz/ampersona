@@ -1395,6 +1395,10 @@ fn state_rev_audit_consistency_check() {
     );
     // state_rev=99 but only 1 gate transition → inconsistent
     assert_eq!(audit["state_rev_check"]["state_rev"], 99);
+    assert_eq!(
+        audit["state_rev_check"]["consistent"], false,
+        "state_rev=99 with 1 transition should be inconsistent"
+    );
 }
 
 /// Audit chain stays valid through a full pending/approve lifecycle.

@@ -15,3 +15,4 @@ thiserror = "2"
 toon = { git = "https://github.com/joyshmitz/toon_rust.git", package = "tru" }
 ed25519-dalek = { version = "2" }
 sha2 = "0.10"
+base64 = "0.22"

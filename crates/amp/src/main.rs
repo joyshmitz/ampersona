@@ -814,19 +814,9 @@ fn cmd_authority(
         };
 
         // Apply authority overlay as post-resolution patch (ADR-010).
-        // First check state.active_overlay; fall back to legacy sidecar file for migration.
-        let overlay_from_state = state.as_ref().and_then(|s| s.active_overlay.as_ref());
-        let sidecar_path = file.replace(".json", ".authority_overlay.json");
-        let sidecar_overlay: Option<ampersona_core::spec::authority::AuthorityOverlay> =
-            if overlay_from_state.is_none() {
-                std::fs::read_to_string(&sidecar_path)
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-            } else {
-                None
-            };
-        let active_overlay = overlay_from_state.or(sidecar_overlay.as_ref());
-        let resolved = if let Some(overlay) = active_overlay {
+        // Only reads from state.active_overlay — sidecar migration is cmd_gate's job.
+        let resolved = if let Some(overlay) = state.as_ref().and_then(|s| s.active_overlay.as_ref())
+        {
             ampersona_engine::policy::precedence::apply_overlay(&resolved, overlay)
         } else {
             resolved
@@ -1245,7 +1235,7 @@ fn cmd_gate_inner(opts: GateOpts) -> Result<CmdExit> {
                 >(&sidecar_content)
                 {
                     state.active_overlay = Some(overlay);
-                    let _ = std::fs::remove_file(&sidecar_path);
+                    // Don't delete sidecar yet — wait until state is successfully written.
                     if !json_out {
                         eprintln!("  migrated sidecar overlay to state");
                     }
@@ -1321,6 +1311,8 @@ fn cmd_gate_inner(opts: GateOpts) -> Result<CmdExit> {
                             json.as_bytes(),
                         )?;
                     }
+                    // State written — safe to delete migrated sidecar now
+                    let _ = std::fs::remove_file(&sidecar_path);
 
                     if !json_out {
                         eprintln!(
@@ -1425,6 +1417,8 @@ fn cmd_gate_inner(opts: GateOpts) -> Result<CmdExit> {
                             json.as_bytes(),
                         )?;
                     }
+                    // State written — safe to delete migrated sidecar now
+                    let _ = std::fs::remove_file(&sidecar_path);
                     if !json_out {
                         eprintln!(
                             "  transition: {} \u{2192} {}",
@@ -1748,10 +1742,9 @@ fn cmd_audit(opts: AuditOpts) -> CmdExit {
                                     &audit_path,
                                 )
                                 .unwrap_or(0);
-                            // state_rev can be > transitions+1 if pending/approve both increment
-                            // but state_rev > gate_transitions + pending_count is suspicious
-                            let consistent = state.state_rev <= transitions + 1
-                                || state.last_transition.is_some();
+                            // state_rev should closely track audit transitions.
+                            // Allow +1 slack for pending/approve or elevation increments.
+                            let consistent = state.state_rev <= transitions + 1;
                             output["state_rev_check"] = serde_json::json!({
                                 "state_rev": state.state_rev,
                                 "gate_transitions": transitions,

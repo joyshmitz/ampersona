@@ -44,9 +44,9 @@ impl AuthorityEnforcer for DefaultPolicyChecker {
 
         // 4. Check path scope (with optional symlink validation)
         if let Some(path) = &req.path {
-            // Symlink validation: if any shell scoped action has validate_symlinks=true,
-            // canonicalize the path before scope checks.
-            let check_path = if self.should_validate_symlinks(authority) {
+            let validate_symlinks = self.should_validate_symlinks(authority);
+            // Symlink validation: if enabled, canonicalize the path before scope checks.
+            let check_path = if validate_symlinks {
                 match std::fs::canonicalize(path) {
                     Ok(canonical) => canonical.to_string_lossy().to_string(),
                     Err(_) => path.clone(), // non-existent path: use as-is
@@ -59,7 +59,8 @@ impl AuthorityEnforcer for DefaultPolicyChecker {
                 // Forbidden paths first (deny)
                 if let Some(forbidden) = &scope.forbidden_paths {
                     for pattern in forbidden {
-                        if glob_match(pattern, &check_path) {
+                        let resolved_pattern = resolve_pattern(pattern, validate_symlinks);
+                        if glob_match(&resolved_pattern, &check_path) {
                             let reason = if check_path != *path {
                                 format!(
                                     "path '{path}' (canonicalized to '{check_path}') matches forbidden pattern '{pattern}' — symlink escapes scope"
@@ -73,7 +74,9 @@ impl AuthorityEnforcer for DefaultPolicyChecker {
                 }
                 // Then allowed paths
                 if let Some(allowed) = &scope.allowed_paths {
-                    let path_allowed = allowed.iter().any(|p| glob_match(p, &check_path));
+                    let path_allowed = allowed
+                        .iter()
+                        .any(|p| glob_match(&resolve_pattern(p, validate_symlinks), &check_path));
                     if !path_allowed {
                         let reason = if check_path != *path {
                             format!(
@@ -269,6 +272,40 @@ fn has_redirect(cmd: &str) -> bool {
 /// Check for background execution patterns in a command string.
 fn has_background(cmd: &str) -> bool {
     cmd.trim_end().ends_with('&') || cmd.contains("& ")
+}
+
+/// When validate_symlinks is true, resolve relative scope patterns to absolute
+/// by canonicalizing the non-glob prefix against CWD. Without this, a canonical
+/// (absolute) path would never match a relative pattern like `src/**`.
+fn resolve_pattern(pattern: &str, validate_symlinks: bool) -> String {
+    if !validate_symlinks || pattern.starts_with('/') {
+        return pattern.to_string();
+    }
+    // Find the non-glob prefix (e.g., "src" from "src/**")
+    let first_glob = pattern.find('*').unwrap_or(pattern.len());
+    let base_end = pattern[..first_glob]
+        .rfind('/')
+        .map(|p| p + 1)
+        .unwrap_or(first_glob);
+    let base = pattern[..base_end].trim_end_matches('/');
+    let suffix = &pattern[base_end..];
+    if base.is_empty() {
+        // Pattern is like "*.ext" or "**/*" — prepend canonical CWD
+        if let Ok(cwd) = std::env::current_dir().and_then(std::fs::canonicalize) {
+            return format!("{}/{}", cwd.display(), pattern);
+        }
+        return pattern.to_string();
+    }
+    match std::fs::canonicalize(base) {
+        Ok(canonical_base) => {
+            if suffix.is_empty() {
+                canonical_base.to_string_lossy().to_string()
+            } else {
+                format!("{}/{}", canonical_base.display(), suffix)
+            }
+        }
+        Err(_) => pattern.to_string(),
+    }
 }
 
 /// Simple glob matching (supports *, **, and file extensions).

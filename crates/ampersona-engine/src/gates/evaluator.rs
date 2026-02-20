@@ -202,7 +202,8 @@ fn check_metric_type(
     let expected_type = metric_schema.metric_type.as_str();
 
     let matches = match expected_type {
-        "number" | "numeric" | "integer" | "float" => value.is_number(),
+        "number" | "numeric" | "float" => value.is_number(),
+        "integer" => value.is_i64() || value.is_u64(),
         "boolean" | "bool" => value.is_boolean(),
         "string" => value.is_string(),
         _ => true, // unknown schema type → no check
