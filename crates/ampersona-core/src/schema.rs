@@ -278,8 +278,13 @@ fn check_signature_strict(
         return;
     };
 
-    // Parse signature: try base64 first (amp sign output), then hex fallback
-    let sig_bytes = decode_base64(sig_value_str).or_else(|| decode_hex(sig_value_str));
+    // Parse signature: if strictly hex, decode as hex; otherwise try base64.
+    // Hex-first avoids base64 silently "succeeding" on hex strings with wrong bytes.
+    let sig_bytes = if is_strict_hex(sig_value_str) {
+        decode_hex(sig_value_str)
+    } else {
+        decode_base64(sig_value_str)
+    };
     let Some(sig_bytes) = sig_bytes else {
         errors.push(CheckIssue {
             code: "E030".to_string(),
@@ -323,6 +328,10 @@ fn check_signature_strict(
             path: Some("$.signature.value".to_string()),
         });
     }
+}
+
+fn is_strict_hex(s: &str) -> bool {
+    s.len().is_multiple_of(2) && !s.is_empty() && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
@@ -663,6 +672,56 @@ mod tests {
         assert!(
             report.errors.iter().any(|e| e.code == "E030"),
             "tampered persona should produce E030"
+        );
+    }
+
+    #[test]
+    fn check_strict_hex_signature_passes() {
+        use ed25519_dalek::Signer;
+        let mut data = minimal_v10();
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0xBB; 32]);
+        let verifying_key = signing_key.verifying_key();
+        let pubkey_hex: String = verifying_key
+            .as_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+
+        let signed_fields: Vec<String> = vec!["version", "name", "role", "psychology", "voice"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let canonical = jcs_canonicalize_fields(&data, &signed_fields);
+        let sig = signing_key.sign(&canonical);
+        // Encode as hex (not base64) to test hex path
+        let sig_hex: String = sig.to_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        let digest_hex: String = {
+            use sha2::Digest;
+            let hash = sha2::Sha256::digest(&canonical);
+            hash.iter().map(|b| format!("{b:02x}")).collect()
+        };
+
+        data.as_object_mut().unwrap().insert(
+            "signature".into(),
+            serde_json::json!({
+                "algorithm": "ed25519",
+                "key_id": "test",
+                "signer": "test-signer",
+                "canonicalization": "JCS-RFC8785",
+                "signed_fields": signed_fields,
+                "created_at": "2026-01-01T00:00:00Z",
+                "digest": digest_hex,
+                "value": sig_hex,
+                "public_key": pubkey_hex,
+            }),
+        );
+
+        let report = check(&data, "test.json", true);
+        assert!(
+            report.pass,
+            "valid hex-encoded signature should pass check --strict, errors: {:?}, warnings: {:?}",
+            report.errors, report.warnings
         );
     }
 
