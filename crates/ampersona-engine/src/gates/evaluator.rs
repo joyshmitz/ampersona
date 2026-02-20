@@ -497,7 +497,7 @@ mod tests {
                     "trusted",
                     "active",
                     vec![Criterion {
-                        metric: "policy_violations_30d".into(),
+                        metric: "policy_violations".into(),
                         op: CriterionOp::Gte,
                         window_seconds: None,
                         value: serde_json::json!(3),
@@ -531,7 +531,7 @@ mod tests {
 
         // Agent has accumulated violations
         let mut metrics_map = HashMap::new();
-        metrics_map.insert("policy_violations_30d".into(), serde_json::json!(5));
+        metrics_map.insert("policy_violations".into(), serde_json::json!(5));
         let metrics = TestMetrics(metrics_map);
 
         let evaluator = DefaultGateEvaluator;

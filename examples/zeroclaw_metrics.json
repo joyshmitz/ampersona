@@ -1,6 +1,6 @@
 {
   "tasks_completed": 25,
   "error_rate": 0.03,
-  "policy_violations_30d": 0,
+  "policy_violations": 0,
   "schema_valid": true
 }

@@ -1571,6 +1571,45 @@ fn state_overlay_preferred_over_sidecar() {
     );
 }
 
+/// window_seconds on criterion survives schema validation and round-trip.
+#[test]
+fn window_seconds_schema_roundtrip() {
+    // zeroclaw_agent.json trust_decay gate now has window_seconds: 2592000
+    let v = amp_json(
+        &[
+            "check",
+            "examples/zeroclaw_agent.json",
+            "--strict",
+            "--json",
+        ],
+        0,
+    );
+    assert_eq!(
+        v["pass"], true,
+        "persona with window_seconds must pass check"
+    );
+
+    // Round-trip: parse → serialize → parse, verify window_seconds preserved
+    let src =
+        std::fs::read_to_string(workspace_root().join("examples/zeroclaw_agent.json")).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&src).unwrap();
+    let gates = parsed["gates"].as_array().unwrap();
+    let trust_decay = gates.iter().find(|g| g["id"] == "trust_decay").unwrap();
+    let criterion = &trust_decay["criteria"][0];
+    assert_eq!(
+        criterion["window_seconds"], 2592000,
+        "window_seconds should be 2592000 (30 days)"
+    );
+    assert_eq!(criterion["metric"], "policy_violations");
+
+    // Serialize back and re-parse
+    let reserialized = serde_json::to_string_pretty(&parsed).unwrap();
+    let reparsed: serde_json::Value = serde_json::from_str(&reserialized).unwrap();
+    let gates2 = reparsed["gates"].as_array().unwrap();
+    let td2 = gates2.iter().find(|g| g["id"] == "trust_decay").unwrap();
+    assert_eq!(td2["criteria"][0]["window_seconds"], 2592000);
+}
+
 /// NeedsApproval matrix: test authority decision across autonomy levels.
 #[test]
 fn needs_approval_autonomy_matrix() {

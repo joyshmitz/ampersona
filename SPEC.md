@@ -317,7 +317,8 @@ GateEnforcement = "enforce" | "observe"
 Criterion {
   metric: string (required),
   op: CriterionOp (required),
-  value: any (required)
+  value: any (required),
+  window_seconds: integer (optional, minimum 1)
 }
 
 CriterionOp = "eq" | "neq" | "gt" | "gte" | "lt" | "lte"

@@ -160,8 +160,8 @@
       "cooldown_seconds": 86400,
       "from_phase": "trusted",
       "to_phase": "active",
-      "criteria": [{ "metric": "policy_violations_30d", "op": "gte", "value": 3 }],
-      "metrics_schema": { "policy_violations_30d": { "type": "integer" } },
+      "criteria": [{ "metric": "policy_violations", "op": "gte", "value": 3, "window_seconds": 2592000 }],
+      "metrics_schema": { "policy_violations": { "type": "integer" } },
       "approval": "auto",
       "on_pass": { "authority_overlay": { "autonomy": "supervised" } }
     }
