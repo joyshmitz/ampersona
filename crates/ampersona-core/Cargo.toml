@@ -12,4 +12,4 @@ anyhow = "1"
 jsonschema = "0.29"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
-toon = { path = "../../../toon_rust", package = "tru" }
+toon = { git = "https://github.com/joyshmitz/toon_rust.git", package = "tru" }
