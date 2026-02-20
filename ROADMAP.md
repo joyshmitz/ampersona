@@ -19,7 +19,7 @@ Platform is spec-correct, domain-agnostic, auditable.
 - `GateApproval::Quorum` returns `error_quorum_not_supported`
 
 The platform is a formally correct empty shell.
-v1.1 closes the gaps. See `Theory.md` for mathematical context.
+v1.1 closes the gaps. See `THEORY.md` for mathematical context.
 
 ---
 
@@ -53,7 +53,7 @@ Full scenario (`phase: null → active → trusted → demote back`) exercisable
 
 **Dependency:** Phase 0 complete.
 
-**Goal:** Close the three mathematical gaps in `Theory.md`.
+**Goal:** Close the three mathematical gaps in `THEORY.md`.
 After this phase, `Inv` is defined, Guard is compositional, Quorum has a protocol.
 
 #### 1.1 — ADR-007 + `CriteriaLogic`
@@ -109,11 +109,11 @@ After this phase, `Inv` is defined, Guard is compositional, Quorum has a protoco
 |-------------|--------|----------|
 | Approval replay attack (same approver submits twice) | `approvals.len()` exceeds required with single approver | Idempotency: `approver_id` must be unique in `approvals` vec. Test explicitly. |
 | TTL expiry not enforced | Stale pending transition blocks new Gate evaluation | State load must check TTL at read time, not only at write time. |
-| Quorum state lost on crash | `state_rev` mismatch between state file and audit | Crash between state write and audit is a known gap (documented in `Theory.md`). Detection only, not prevention at this stage. |
+| Quorum state lost on crash | `state_rev` mismatch between state file and audit | Crash between state write and audit is a known gap (documented in `THEORY.md`). Detection only, not prevention at this stage. |
 | `required > of` silently accepted | Invalid config creates ungrantable Gate | Validate at `amp check` time, not at evaluation time. Schema constraint + test. |
 
 **Phase 1 success criterion:**
-`cargo test --workspace` green. All three gaps from `Theory.md` have corresponding types and tests.
+`cargo test --workspace` green. All three gaps from `THEORY.md` have corresponding types and tests.
 Zero changes to `AuthorityEnforcer`, `MetricsProvider`, `AuditSink` signatures — those are stable.
 
 **Phase 1 failure mode (phase-level):**
@@ -190,7 +190,7 @@ Physical register value change causes phase transition visible in `amp status`.
 **Goal:** Formal claim about reachability. Not just tests — a proof or a bounded model check.
 
 **Steps:**
-1. Define concrete hybrid automaton in `Theory.md`: Modbus domain, 3 phases, 5 Gates, exact threshold values
+1. Define concrete hybrid automaton in `THEORY.md`: Modbus domain, 3 phases, 5 Gates, exact threshold values
 2. Identify `X_unsafe` (e.g. supply temperature > 95°C with agent in `full` autonomy phase)
 3. Prove or model-check that `X_unsafe` is unreachable from `Init` given the invariants
 4. Fill `DenyEntry::WithReason { compliance_ref }` with real standards: IEC 61511, NERC CIP

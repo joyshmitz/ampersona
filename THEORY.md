@@ -163,7 +163,7 @@ Requires ADR-009 before implementation.
 **Remaining:**
 - `AuthorityEnforcer` not yet called in zeroclaw tool invocation path
 - No end-to-end test: SOP step → `MetricSample` → Gate fires → PhaseState changes → audit verified
-- See `Roadmap.md` Phase 2
+- See `ROADMAP.md` Phase 2
 
 ---
 
