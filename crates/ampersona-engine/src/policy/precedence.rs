@@ -634,6 +634,35 @@ mod tests {
     }
 
     #[test]
+    fn overlay_lifecycle_promote_demote() {
+        // Promote sets overlay, demote replaces it, clearing the promote overlay.
+        let persona = make_authority(AutonomyLevel::Supervised, vec!["read_file"], vec![]);
+        let base = resolve_authority(&[&persona]);
+
+        // Promote overlay: expand to full autonomy + deploy
+        let promote_overlay = make_overlay(
+            Some(AutonomyLevel::Full),
+            Some(vec!["read_file", "deploy"]),
+            None,
+        );
+        let after_promote = apply_overlay(&base, &promote_overlay);
+        assert_eq!(after_promote.autonomy, AutonomyLevel::Full);
+        assert!(after_promote
+            .allowed_actions
+            .iter()
+            .any(|a| a.to_string() == "deploy"));
+
+        // Demote overlay: restrict to readonly, no actions
+        let demote_overlay = make_overlay(Some(AutonomyLevel::Readonly), Some(vec![]), None);
+        let after_demote = apply_overlay(&base, &demote_overlay);
+        assert_eq!(after_demote.autonomy, AutonomyLevel::Readonly);
+        assert!(after_demote.allowed_actions.is_empty());
+
+        // No overlay (cleared): back to base
+        assert_eq!(base.autonomy, AutonomyLevel::Supervised);
+    }
+
+    #[test]
     fn overlay_deny_additive() {
         // Overlay can add new deny entries but cannot remove existing ones.
         let persona = make_authority(

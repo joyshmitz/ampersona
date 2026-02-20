@@ -483,6 +483,51 @@ fn check_gate_consistency(data: &Value, warnings: &mut Vec<CheckIssue>) {
             }
         }
     }
+
+    // E022: Duplicate gate id
+    let mut seen_ids: Vec<String> = Vec::new();
+    for (i, gate) in gates.iter().enumerate() {
+        if let Some(id) = gate.get("id").and_then(Value::as_str) {
+            if seen_ids.contains(&id.to_string()) {
+                warnings.push(CheckIssue {
+                    code: "E022".to_string(),
+                    check: "consistency".to_string(),
+                    message: format!("duplicate gate id '{id}'"),
+                    path: Some(format!("$.gates[{i}].id")),
+                });
+            } else {
+                seen_ids.push(id.to_string());
+            }
+        }
+    }
+
+    // E023: Gate references phase not declared in any gate's from_phase/to_phase set
+    let mut known_phases: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for gate in gates {
+        if let Some(f) = gate.get("from_phase").and_then(Value::as_str) {
+            known_phases.insert(f.to_string());
+        }
+        if let Some(t) = gate.get("to_phase").and_then(Value::as_str) {
+            known_phases.insert(t.to_string());
+        }
+    }
+    // Check on_pass.next_phase references
+    for (i, gate) in gates.iter().enumerate() {
+        if let Some(on_pass) = gate.get("on_pass") {
+            if let Some(next) = on_pass.get("next_phase").and_then(Value::as_str) {
+                if !known_phases.contains(next) {
+                    warnings.push(CheckIssue {
+                        code: "E023".to_string(),
+                        check: "consistency".to_string(),
+                        message: format!(
+                            "on_pass.next_phase '{next}' not found in any gate from_phase/to_phase"
+                        ),
+                        path: Some(format!("$.gates[{i}].on_pass.next_phase")),
+                    });
+                }
+            }
+        }
+    }
 }
 
 fn check_contract(data: &Value, warnings: &mut Vec<CheckIssue>) {
