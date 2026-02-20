@@ -319,6 +319,8 @@ Criterion {
   op: CriterionOp (required),
   value: any (required),
   window_seconds: integer (optional, minimum 1)
+    — maps to MetricQuery.window as Duration::from_secs(window_seconds)
+    — when absent, MetricQuery.window = None (provider decides default)
 }
 
 CriterionOp = "eq" | "neq" | "gt" | "gte" | "lt" | "lte"
