@@ -52,10 +52,13 @@ name = "ampersona-core"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
+ "ed25519-dalek",
  "jsonschema",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tru",
 ]

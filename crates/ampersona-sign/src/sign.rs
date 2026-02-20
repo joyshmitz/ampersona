@@ -35,6 +35,14 @@ pub fn sign_persona(
     let signature = signing_key.sign(&canonical);
     let sig_b64 = base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
 
+    // Derive public key for embedding
+    let verifying_key = signing_key.verifying_key();
+    let pubkey_hex: String = verifying_key
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+
     // Build signature block
     let sig_block = serde_json::json!({
         "algorithm": "ed25519",
@@ -44,7 +52,8 @@ pub fn sign_persona(
         "signed_fields": signed_fields,
         "created_at": chrono::Utc::now().to_rfc3339(),
         "digest": digest_hex,
-        "value": sig_b64
+        "value": sig_b64,
+        "public_key": pubkey_hex
     });
 
     data.as_object_mut()

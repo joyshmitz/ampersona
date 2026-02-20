@@ -74,7 +74,11 @@ fn should_audit(config: Option<&AuditConfig>, event_type: &str) -> bool {
         "GateTransition" => config.log_gate_transitions,
         "PolicyDecision" => config.log_decisions,
         // These event types are always audited (security-critical)
-        "Override" | "ElevationChange" | "SignatureVerify" | "StateChange" => true,
+        "Override"
+        | "ElevationChange"
+        | "SignatureVerify"
+        | "StateChange"
+        | "AuthorityOverlayChange" => true,
         _ => true,
     }
 }

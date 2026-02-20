@@ -355,7 +355,8 @@
         "signed_fields": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
         "created_at": { "type": "string" },
         "digest": { "type": "string" },
-        "value": { "type": "string" }
+        "value": { "type": "string" },
+        "public_key": { "type": "string" }
       }
     },
     "AuditConfig": {

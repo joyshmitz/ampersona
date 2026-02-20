@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::spec::authority::AuthorityOverlay;
+
 /// Persistent phase state for an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhaseState {
@@ -13,6 +15,10 @@ pub struct PhaseState {
     pub last_transition: Option<TransitionRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_transition: Option<PendingTransition>,
+    /// Active authority overlay from last gate on_pass effect.
+    /// Applied as a post-resolution patch in authority checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_overlay: Option<AuthorityOverlay>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -25,6 +31,7 @@ impl PhaseState {
             active_elevations: Vec::new(),
             last_transition: None,
             pending_transition: None,
+            active_overlay: None,
             updated_at: Utc::now(),
         }
     }

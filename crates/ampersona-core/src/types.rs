@@ -125,6 +125,7 @@ pub enum AuditEventType {
     Override,
     SignatureVerify,
     StateChange,
+    AuthorityOverlayChange,
 }
 
 /// MBTI personality types.

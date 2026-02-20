@@ -500,6 +500,66 @@ fn authority_json_error_on_missing_file() {
     assert_eq!(v["code"], "E_FILE_NOT_FOUND");
 }
 
+// ── Extension round-trip (1) ────────────────────────────────────
+
+/// Extension fields survive serde round-trip (Rust layer).
+/// Note: JSON Schema uses additionalProperties:false, so ext fields are validated
+/// at the Rust struct level, not by `amp check`. This tests serde round-trip fidelity.
+#[test]
+fn extension_roundtrip_preserved() {
+    // Test that Authority ext fields survive serde round-trip
+    let authority_json = serde_json::json!({
+        "autonomy": "full",
+        "ext": {
+            "custom": { "key": 42, "nested": { "deep": true } }
+        }
+    });
+
+    // Serialize → parse → serialize → compare
+    let json_str = serde_json::to_string(&authority_json).unwrap();
+    let reparsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(
+        authority_json["ext"], reparsed["ext"],
+        "ext fields must survive JSON round-trip"
+    );
+    assert_eq!(reparsed["ext"]["custom"]["key"], 42);
+    assert_eq!(reparsed["ext"]["custom"]["nested"]["deep"], true);
+
+    // Also verify that amp check works on a valid persona (without ext in schema)
+    let v = amp_json(&["check", "examples/zeroclaw_agent.json", "--json"], 0);
+    assert_eq!(v["pass"], true);
+
+    // Verify amp migrate produces identical output (round-trip stable)
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("test.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+
+    let before = std::fs::read_to_string(&persona_path).unwrap();
+    let before_parsed: serde_json::Value = serde_json::from_str(&before).unwrap();
+
+    let out = amp_bin()
+        .args(["migrate", persona_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "migrate should succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let after = std::fs::read_to_string(&persona_path).unwrap();
+    let after_parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
+
+    // All top-level fields should be preserved
+    assert_eq!(before_parsed["name"], after_parsed["name"]);
+    assert_eq!(before_parsed["authority"], after_parsed["authority"]);
+    assert_eq!(before_parsed["gates"], after_parsed["gates"]);
+}
+
 // ── E2E workflow (1) ────────────────────────────────────────────
 
 #[test]
@@ -1274,6 +1334,73 @@ fn checkpoint_missing_signature_errors() {
     );
 }
 
+/// state_rev vs audit: detect inconsistency when state advanced without audit.
+#[test]
+fn state_rev_audit_consistency_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_metrics.json"),
+        &metrics_path,
+    )
+    .unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    // Run gate to create state + audit
+    let _ = amp_bin()
+        .args(["gate", persona, "--evaluate", "*", "--metrics", metrics])
+        .output()
+        .unwrap();
+
+    // Verify state_rev_check is present in audit --verify --json
+    let out = amp_bin()
+        .args(["audit", persona, "--verify", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let audit: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(audit["valid"], true);
+    // state_rev_check should be present since state file exists
+    assert!(
+        audit.get("state_rev_check").is_some(),
+        "state_rev_check should be present in audit verify output"
+    );
+    assert_eq!(audit["state_rev_check"]["consistent"], true);
+
+    // Now artificially bump state_rev to create inconsistency
+    let state_path = dir.path().join("agent.state.json");
+    let state_text = std::fs::read_to_string(&state_path).unwrap();
+    let mut state: serde_json::Value = serde_json::from_str(&state_text).unwrap();
+    state["state_rev"] = serde_json::json!(99);
+    std::fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+
+    // Re-verify: should flag inconsistency
+    let out = amp_bin()
+        .args(["audit", persona, "--verify", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let audit: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        audit.get("state_rev_check").is_some(),
+        "state_rev_check should be present"
+    );
+    // state_rev=99 but only 1 state mutation → inconsistent
+    assert_eq!(audit["state_rev_check"]["state_rev"], 99);
+    assert_eq!(
+        audit["state_rev_check"]["consistent"], false,
+        "state_rev=99 with 1 state mutation should be inconsistent"
+    );
+}
+
 /// Audit chain stays valid through a full pending/approve lifecycle.
 #[test]
 fn audit_valid_after_pending_approve_lifecycle() {
@@ -1325,4 +1452,210 @@ fn audit_valid_after_pending_approve_lifecycle() {
     let audit: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(audit["valid"], true);
     assert!(audit["entries"].as_u64().unwrap() >= 3);
+}
+
+/// Sidecar .authority_overlay.json is migrated into state on gate evaluate.
+#[test]
+fn sidecar_overlay_migration_to_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_metrics.json"),
+        &metrics_path,
+    )
+    .unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    // Run onboarding gate to create state
+    let _ = amp_bin()
+        .args(["gate", persona, "--evaluate", "*", "--metrics", metrics])
+        .output()
+        .unwrap();
+
+    // Create a legacy sidecar overlay file
+    let sidecar_path = dir.path().join("agent.authority_overlay.json");
+    std::fs::write(&sidecar_path, r#"{"autonomy": "full"}"#).unwrap();
+
+    // Verify sidecar exists
+    assert!(
+        sidecar_path.exists(),
+        "sidecar should exist before migration"
+    );
+
+    // Run gate evaluate again — should migrate sidecar into state
+    let _ = amp_bin()
+        .args(["gate", persona, "--evaluate", "*", "--metrics", metrics])
+        .output()
+        .unwrap();
+
+    // Sidecar should be deleted
+    assert!(
+        !sidecar_path.exists(),
+        "sidecar should be deleted after migration"
+    );
+
+    // State should have active_overlay
+    let state_path = dir.path().join("agent.state.json");
+    let state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert!(
+        state.get("active_overlay").is_some(),
+        "state should have active_overlay after migration"
+    );
+    assert_eq!(
+        state["active_overlay"]["autonomy"], "full",
+        "migrated overlay should preserve autonomy"
+    );
+}
+
+/// State overlay takes precedence over sidecar file.
+#[test]
+fn state_overlay_preferred_over_sidecar() {
+    let dir = tempfile::tempdir().unwrap();
+    let persona_path = dir.path().join("agent.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_agent.json"),
+        &persona_path,
+    )
+    .unwrap();
+    let metrics_path = dir.path().join("metrics.json");
+    std::fs::copy(
+        workspace_root().join("examples/zeroclaw_metrics.json"),
+        &metrics_path,
+    )
+    .unwrap();
+
+    let persona = persona_path.to_str().unwrap();
+    let metrics = metrics_path.to_str().unwrap();
+
+    // Run onboarding gate to create state
+    let _ = amp_bin()
+        .args(["gate", persona, "--evaluate", "*", "--metrics", metrics])
+        .output()
+        .unwrap();
+
+    // Set active_overlay in state directly (simulating already-migrated state)
+    let state_path = dir.path().join("agent.state.json");
+    let state_text = std::fs::read_to_string(&state_path).unwrap();
+    let mut state: serde_json::Value = serde_json::from_str(&state_text).unwrap();
+    state["active_overlay"] = serde_json::json!({"autonomy": "supervised"});
+    std::fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+
+    // Also create a sidecar file with different autonomy
+    let sidecar_path = dir.path().join("agent.authority_overlay.json");
+    std::fs::write(&sidecar_path, r#"{"autonomy": "full"}"#).unwrap();
+
+    // Authority check should use state overlay (supervised), not sidecar (full)
+    let out = amp_bin()
+        .args(["authority", persona, "--check", "read_file", "--json"])
+        .output()
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        result["autonomy"], "supervised",
+        "should use state overlay, not sidecar"
+    );
+
+    // Sidecar should NOT be deleted (migration only happens when state has no overlay)
+    assert!(
+        sidecar_path.exists(),
+        "sidecar should not be deleted when state already has overlay"
+    );
+}
+
+/// NeedsApproval matrix: test authority decision across autonomy levels.
+#[test]
+fn needs_approval_autonomy_matrix() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Helper: create persona with given autonomy and optional require_approval_for
+    let make_persona = |autonomy: &str, require_approval: bool| -> serde_json::Value {
+        let mut persona = serde_json::json!({
+            "version": "1.0",
+            "name": "MatrixTest",
+            "role": "test",
+            "psychology": {
+                "neural_matrix": {
+                    "creativity": 0.5, "empathy": 0.5, "logic": 0.5,
+                    "adaptability": 0.5, "charisma": 0.5, "reliability": 0.5
+                },
+                "traits": {
+                    "mbti": "INTJ", "temperament": "phlegmatic",
+                    "ocean": { "openness": 0.5, "conscientiousness": 0.5,
+                        "extraversion": 0.5, "agreeableness": 0.5, "neuroticism": 0.5 }
+                },
+                "moral_compass": { "alignment": "true-neutral", "core_values": ["test"] },
+                "emotional_profile": { "base_mood": "calm", "volatility": 0.1 }
+            },
+            "voice": {
+                "style": { "descriptors": ["terse"], "formality": 0.5, "verbosity": 0.3 },
+                "syntax": { "structure": "declarative", "contractions": true },
+                "idiolect": { "catchphrases": [], "forbidden_words": [] }
+            },
+            "authority": {
+                "autonomy": autonomy,
+                "actions": { "allow": ["read_file"] }
+            }
+        });
+        if require_approval {
+            persona["authority"]["limits"] = serde_json::json!({
+                "require_approval_for": ["high_risk"]
+            });
+        }
+        persona
+    };
+
+    // Matrix:
+    // | autonomy   | require_approval | action=read_file | expected      | exit |
+    // |------------|------------------|------------------|---------------|------|
+    // | full       | false            | read_file        | Allow         | 0    |
+    // | supervised | false            | read_file        | Allow         | 0    |
+    // | supervised | true             | read_file        | NeedsApproval | 2    |
+    // | readonly   | false            | read_file        | Deny          | 1    |
+    let cases = [
+        ("full", false, 0, "Allow"),
+        ("supervised", false, 0, "Allow"),
+        ("supervised", true, 2, "NeedsApproval"),
+        ("readonly", false, 1, "Deny"),
+    ];
+
+    for (autonomy, require_approval, expected_exit, expected_decision) in &cases {
+        let persona = make_persona(autonomy, *require_approval);
+        let path = dir
+            .path()
+            .join(format!("matrix_{autonomy}_{require_approval}.json"));
+        std::fs::write(&path, serde_json::to_string_pretty(&persona).unwrap()).unwrap();
+
+        let out = amp_bin()
+            .args([
+                "authority",
+                path.to_str().unwrap(),
+                "--check",
+                "read_file",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        let exit = out.status.code().unwrap_or(-1);
+        assert_eq!(
+            exit, *expected_exit,
+            "autonomy={autonomy} require_approval={require_approval}: expected exit {expected_exit}, got {exit}\nstderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(
+            result["decision"], *expected_decision,
+            "autonomy={autonomy} require_approval={require_approval}: expected {expected_decision}, got {}",
+            result["decision"]
+        );
+    }
 }

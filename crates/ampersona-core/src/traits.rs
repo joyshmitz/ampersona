@@ -107,6 +107,8 @@ pub struct CriteriaResult {
     pub value: serde_json::Value,
     pub actual: serde_json::Value,
     pub pass: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_mismatch: Option<String>,
 }
 
 /// Elevation lifecycle event.

@@ -42,28 +42,50 @@ impl AuthorityEnforcer for DefaultPolicyChecker {
             return Ok(decision);
         }
 
-        // 4. Check path scope
+        // 4. Check path scope (with optional symlink validation)
         if let Some(path) = &req.path {
+            let validate_symlinks = self.should_validate_symlinks(authority);
+            // Symlink validation: if enabled, canonicalize the path before scope checks.
+            let check_path = if validate_symlinks {
+                match std::fs::canonicalize(path) {
+                    Ok(canonical) => canonical.to_string_lossy().to_string(),
+                    Err(_) => path.clone(), // non-existent path: use as-is
+                }
+            } else {
+                path.clone()
+            };
+
             if let Some(scope) = &authority.scope {
                 // Forbidden paths first (deny)
                 if let Some(forbidden) = &scope.forbidden_paths {
                     for pattern in forbidden {
-                        if glob_match(pattern, path) {
-                            return Ok(PolicyDecision::Deny {
-                                reason: format!(
-                                    "path '{path}' matches forbidden pattern '{pattern}'"
-                                ),
-                            });
+                        let resolved_pattern = resolve_pattern(pattern, validate_symlinks);
+                        if glob_match(&resolved_pattern, &check_path) {
+                            let reason = if check_path != *path {
+                                format!(
+                                    "path '{path}' (canonicalized to '{check_path}') matches forbidden pattern '{pattern}' — symlink escapes scope"
+                                )
+                            } else {
+                                format!("path '{path}' matches forbidden pattern '{pattern}'")
+                            };
+                            return Ok(PolicyDecision::Deny { reason });
                         }
                     }
                 }
                 // Then allowed paths
                 if let Some(allowed) = &scope.allowed_paths {
-                    let path_allowed = allowed.iter().any(|p| glob_match(p, path));
+                    let path_allowed = allowed
+                        .iter()
+                        .any(|p| glob_match(&resolve_pattern(p, validate_symlinks), &check_path));
                     if !path_allowed {
-                        return Ok(PolicyDecision::Deny {
-                            reason: format!("path '{path}' not in allowed paths"),
-                        });
+                        let reason = if check_path != *path {
+                            format!(
+                                "path '{path}' (canonicalized to '{check_path}') not in allowed paths — symlink escapes scope"
+                            )
+                        } else {
+                            format!("path '{path}' not in allowed paths")
+                        };
+                        return Ok(PolicyDecision::Deny { reason });
                     }
                 }
             }
@@ -95,6 +117,14 @@ impl AuthorityEnforcer for DefaultPolicyChecker {
 }
 
 impl DefaultPolicyChecker {
+    /// Check if symlink validation is enabled via any shell scoped action.
+    fn should_validate_symlinks(&self, authority: &ResolvedAuthority) -> bool {
+        if let Some(ScopedAction::Shell(shell)) = authority.scoped_actions.get("shell") {
+            return shell.validate_symlinks.unwrap_or(false);
+        }
+        false
+    }
+
     /// Check scoped action constraints (shell, git, file_access).
     fn check_scoped_actions(
         &self,
@@ -242,6 +272,40 @@ fn has_redirect(cmd: &str) -> bool {
 /// Check for background execution patterns in a command string.
 fn has_background(cmd: &str) -> bool {
     cmd.trim_end().ends_with('&') || cmd.contains("& ")
+}
+
+/// When validate_symlinks is true, resolve relative scope patterns to absolute
+/// by canonicalizing the non-glob prefix against CWD. Without this, a canonical
+/// (absolute) path would never match a relative pattern like `src/**`.
+fn resolve_pattern(pattern: &str, validate_symlinks: bool) -> String {
+    if !validate_symlinks || pattern.starts_with('/') {
+        return pattern.to_string();
+    }
+    // Find the non-glob prefix (e.g., "src" from "src/**")
+    let first_glob = pattern.find('*').unwrap_or(pattern.len());
+    let base_end = pattern[..first_glob]
+        .rfind('/')
+        .map(|p| p + 1)
+        .unwrap_or(first_glob);
+    let base = pattern[..base_end].trim_end_matches('/');
+    let suffix = &pattern[base_end..];
+    if base.is_empty() {
+        // Pattern is like "*.ext" or "**/*" — prepend canonical CWD
+        if let Ok(cwd) = std::env::current_dir().and_then(std::fs::canonicalize) {
+            return format!("{}/{}", cwd.display(), pattern);
+        }
+        return pattern.to_string();
+    }
+    match std::fs::canonicalize(base) {
+        Ok(canonical_base) => {
+            if suffix.is_empty() {
+                canonical_base.to_string_lossy().to_string()
+            } else {
+                format!("{}/{}", canonical_base.display(), suffix)
+            }
+        }
+        Err(_) => pattern.to_string(),
+    }
 }
 
 /// Simple glob matching (supports *, **, and file extensions).
@@ -455,6 +519,96 @@ mod tests {
         };
         let result = checker.evaluate(&req, &auth).unwrap();
         assert!(matches!(result, PolicyDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn symlink_escape_detected() {
+        // With validate_symlinks=true, a path that canonicalizes outside scope is denied
+        let dir = tempfile::tempdir().unwrap();
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let target = dir.path().join("secrets");
+        std::fs::create_dir_all(&target).unwrap();
+        let secret_file = target.join("key.pem");
+        std::fs::write(&secret_file, "secret").unwrap();
+
+        // Create a symlink: src/link -> ../secrets/key.pem
+        let link_path = src_dir.join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&secret_file, &link_path).unwrap();
+        #[cfg(not(unix))]
+        {
+            // Skip on non-unix
+            return;
+        }
+
+        let checker = DefaultPolicyChecker;
+        let mut scoped = HashMap::new();
+        scoped.insert(
+            "shell".to_string(),
+            ScopedAction::Shell(ScopedShell {
+                commands: None,
+                block_high_risk: None,
+                block_subshells: None,
+                block_redirects: None,
+                block_background: None,
+                validate_symlinks: Some(true),
+            }),
+        );
+        let auth = ResolvedAuthority {
+            autonomy: AutonomyLevel::Full,
+            allowed_actions: vec!["read_file".parse().unwrap()],
+            denied_actions: vec![],
+            scope: Some(ampersona_core::spec::authority::Scope {
+                workspace_only: true,
+                allowed_paths: Some(vec![format!("{}/**", src_dir.to_str().unwrap())]),
+                forbidden_paths: None,
+            }),
+            limits: None,
+            scoped_actions: scoped,
+            deny_metadata: HashMap::new(),
+        };
+        let req = PolicyRequest {
+            action: Some("read_file".parse().unwrap()),
+            path: Some(link_path.to_str().unwrap().to_string()),
+            context: HashMap::new(),
+        };
+        let result = checker.evaluate(&req, &auth).unwrap();
+        // After canonicalization, the path points to secrets/ which is outside src/
+        assert!(
+            matches!(result, PolicyDecision::Deny { .. }),
+            "symlink escape should be denied, got: {result}"
+        );
+    }
+
+    #[test]
+    fn validate_symlinks_false_allows() {
+        // With validate_symlinks disabled (default), symlinks are not resolved
+        let checker = DefaultPolicyChecker;
+        let auth = ResolvedAuthority {
+            autonomy: AutonomyLevel::Full,
+            allowed_actions: vec!["read_file".parse().unwrap()],
+            denied_actions: vec![],
+            scope: Some(ampersona_core::spec::authority::Scope {
+                workspace_only: true,
+                allowed_paths: Some(vec!["src/**".to_string()]),
+                forbidden_paths: None,
+            }),
+            limits: None,
+            scoped_actions: HashMap::new(), // no shell scoped = no validate_symlinks
+            deny_metadata: HashMap::new(),
+        };
+        // This path looks like it's in src/ even though it might be a symlink
+        let req = PolicyRequest {
+            action: Some("read_file".parse().unwrap()),
+            path: Some("src/link_to_secret".to_string()),
+            context: HashMap::new(),
+        };
+        let result = checker.evaluate(&req, &auth).unwrap();
+        assert!(
+            matches!(result, PolicyDecision::Allow { .. }),
+            "without validate_symlinks, path check uses raw path"
+        );
     }
 
     #[test]

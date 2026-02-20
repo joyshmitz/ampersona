@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::spec::authority::AuthorityOverlay;
 use crate::types::{CriterionOp, GateApproval, GateDirection, GateEnforcement};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,5 +53,5 @@ pub struct MetricSchema {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateEffect {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub authority_overlay: Option<serde_json::Value>,
+    pub authority_overlay: Option<AuthorityOverlay>,
 }
