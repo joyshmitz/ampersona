@@ -553,7 +553,7 @@ mod tests {
                         "agreeableness": 0.5, "neuroticism": 0.5
                     }
                 },
-                "moral_compass": { "alignment": "neutral", "core_values": ["test"] },
+                "moral_compass": { "alignment": "true-neutral", "core_values": ["test"] },
                 "emotional_profile": { "base_mood": "calm", "volatility": 0.1 }
             },
             "voice": {
@@ -591,7 +591,7 @@ mod tests {
             .map(|b| format!("{b:02x}"))
             .collect();
 
-        let signed_fields: Vec<String> = vec!["name", "role", "psychology", "voice"]
+        let signed_fields: Vec<String> = vec!["version", "name", "role", "psychology", "voice"]
             .into_iter()
             .map(String::from)
             .collect();
@@ -600,12 +600,23 @@ mod tests {
         let sig_b64 =
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, sig.to_bytes());
 
+        // Compute digest for completeness
+        let digest_hex: String = {
+            use sha2::Digest;
+            let hash = sha2::Sha256::digest(&canonical);
+            hash.iter().map(|b| format!("{b:02x}")).collect()
+        };
+
         data.as_object_mut().unwrap().insert(
             "signature".into(),
             serde_json::json!({
                 "algorithm": "ed25519",
                 "key_id": "test",
+                "signer": "test-signer",
+                "canonicalization": "JCS-RFC8785",
                 "signed_fields": signed_fields,
+                "created_at": "2026-01-01T00:00:00Z",
+                "digest": digest_hex,
                 "value": sig_b64,
                 "public_key": pubkey_hex,
             }),
@@ -613,9 +624,9 @@ mod tests {
 
         let report = check(&data, "test.json", true);
         assert!(
-            report.errors.iter().all(|e| e.code != "E030"),
-            "valid signature should not produce E030, errors: {:?}",
-            report.errors
+            report.pass,
+            "valid signed persona should pass check --strict, errors: {:?}, warnings: {:?}",
+            report.errors, report.warnings
         );
     }
 

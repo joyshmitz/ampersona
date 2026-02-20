@@ -1737,23 +1737,23 @@ fn cmd_audit(opts: AuditOpts) -> CmdExit {
                     let state_path = file.replace(".json", ".state.json");
                     if let Ok(state) = ampersona_engine::state::phase::load_state(&state_path) {
                         if std::path::Path::new(&audit_path).exists() {
-                            let transitions =
-                                ampersona_engine::state::audit_log::count_gate_transitions(
+                            let mutations =
+                                ampersona_engine::state::audit_log::count_state_mutations(
                                     &audit_path,
                                 )
                                 .unwrap_or(0);
-                            // state_rev should closely track audit transitions.
-                            // Allow +1 slack for pending/approve or elevation increments.
-                            let consistent = state.state_rev <= transitions + 1;
+                            // state_rev should match audited state mutations.
+                            // Allow +1 slack for pending/approve flow.
+                            let consistent = state.state_rev <= mutations + 1;
                             output["state_rev_check"] = serde_json::json!({
                                 "state_rev": state.state_rev,
-                                "gate_transitions": transitions,
+                                "state_mutations": mutations,
                                 "consistent": consistent,
                             });
                             if !consistent {
                                 eprintln!(
-                                    "  warn: state_rev ({}) exceeds gate_transition count ({}) + 1",
-                                    state.state_rev, transitions
+                                    "  warn: state_rev ({}) exceeds audited state mutations ({}) + 1",
+                                    state.state_rev, mutations
                                 );
                             }
                         }

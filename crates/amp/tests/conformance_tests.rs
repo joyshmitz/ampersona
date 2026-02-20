@@ -1393,11 +1393,11 @@ fn state_rev_audit_consistency_check() {
         audit.get("state_rev_check").is_some(),
         "state_rev_check should be present"
     );
-    // state_rev=99 but only 1 gate transition → inconsistent
+    // state_rev=99 but only 1 state mutation → inconsistent
     assert_eq!(audit["state_rev_check"]["state_rev"], 99);
     assert_eq!(
         audit["state_rev_check"]["consistent"], false,
-        "state_rev=99 with 1 transition should be inconsistent"
+        "state_rev=99 with 1 state mutation should be inconsistent"
     );
 }
 
