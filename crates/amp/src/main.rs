@@ -796,15 +796,8 @@ fn cmd_authority(
         }
         layers.push(authority);
 
-        // Load authority overlay from gate on_pass if it exists
-        let overlay_path = file.replace(".json", ".authority_overlay.json");
-        let overlay: Option<ampersona_core::spec::authority::Authority> =
-            std::fs::read_to_string(&overlay_path)
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok());
-        if let Some(ref ov) = overlay {
-            layers.push(ov);
-        }
+        // Overlay is no longer a merge layer — it's applied as a post-resolution patch.
+        // See ADR-010: authority_overlay uses patch-replace semantics.
 
         let state_path = file.replace(".json", ".state.json");
         let state = ampersona_engine::state::phase::load_state(&state_path).ok();
@@ -818,6 +811,25 @@ fn cmd_authority(
             )
         } else {
             ampersona_engine::policy::precedence::resolve_authority(&layers)
+        };
+
+        // Apply authority overlay as post-resolution patch (ADR-010).
+        // First check state.active_overlay; fall back to legacy sidecar file for migration.
+        let overlay_from_state = state.as_ref().and_then(|s| s.active_overlay.as_ref());
+        let sidecar_path = file.replace(".json", ".authority_overlay.json");
+        let sidecar_overlay: Option<ampersona_core::spec::authority::AuthorityOverlay> =
+            if overlay_from_state.is_none() {
+                std::fs::read_to_string(&sidecar_path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+            } else {
+                None
+            };
+        let active_overlay = overlay_from_state.or(sidecar_overlay.as_ref());
+        let resolved = if let Some(overlay) = active_overlay {
+            ampersona_engine::policy::precedence::apply_overlay(&resolved, overlay)
+        } else {
+            resolved
         };
 
         let checker = ampersona_engine::policy::checker::DefaultPolicyChecker;
@@ -1123,7 +1135,12 @@ fn cmd_gate_inner(opts: GateOpts) -> Result<CmdExit> {
             }
             let m = JsonMetricsOvr(mdata);
             let evaluator = ampersona_engine::gates::evaluator::DefaultGateEvaluator;
-            let (all_pass, _, _) = evaluator.evaluate_criteria(&gate.criteria, &m);
+            let (all_pass, _, _) = evaluator.evaluate_criteria(
+                &gate.criteria,
+                &m,
+                gate.direction,
+                gate.metrics_schema.as_ref(),
+            );
             if all_pass {
                 bail!(
                     "override rejected: gate '{}' criteria are already passing — no override needed",
@@ -1148,6 +1165,8 @@ fn cmd_gate_inner(opts: GateOpts) -> Result<CmdExit> {
         state.current_phase = Some(record.to_phase.clone());
         state.state_rev += 1;
         state.updated_at = chrono::Utc::now();
+        // Override clears any active overlay (ADR-010)
+        state.active_overlay = None;
 
         // Audit the override
         let audit_entry = serde_json::json!({
@@ -1216,6 +1235,23 @@ fn cmd_gate_inner(opts: GateOpts) -> Result<CmdExit> {
         let writer = ampersona_engine::state::writer::StateWriter::acquire(&state_path);
         let mut state = ampersona_engine::state::phase::load_state(&state_path)
             .unwrap_or_else(|_| ampersona_core::state::PhaseState::new(persona.name.clone()));
+
+        // Migrate legacy sidecar overlay into state (ADR-010)
+        let sidecar_path = file.replace(".json", ".authority_overlay.json");
+        if state.active_overlay.is_none() {
+            if let Ok(sidecar_content) = std::fs::read_to_string(&sidecar_path) {
+                if let Ok(overlay) = serde_json::from_str::<
+                    ampersona_core::spec::authority::AuthorityOverlay,
+                >(&sidecar_content)
+                {
+                    state.active_overlay = Some(overlay);
+                    let _ = std::fs::remove_file(&sidecar_path);
+                    if !json_out {
+                        eprintln!("  migrated sidecar overlay to state");
+                    }
+                }
+            }
+        }
 
         // Enforce TTL on existing elevations
         ampersona_engine::state::elevation::enforce_ttl(&mut state);
@@ -1329,22 +1365,57 @@ fn cmd_gate_inner(opts: GateOpts) -> Result<CmdExit> {
                     // Clear any pending transition since we're applying now
                     state.pending_transition = None;
 
-                    // Apply authority overlay from on_pass if present
+                    // Apply authority overlay from on_pass (ADR-010: stored in state, not sidecar)
+                    let previous_overlay = state.active_overlay.clone();
                     let fired_gate = gates.iter().find(|g| g.id == record.gate_id);
                     if let Some(gate) = fired_gate {
                         if let Some(effect) = &gate.on_pass {
-                            if let Some(overlay) = &effect.authority_overlay {
-                                let overlay_path = file.replace(".json", ".authority_overlay.json");
-                                let overlay_json = serde_json::to_string_pretty(overlay)?;
-                                std::fs::write(&overlay_path, overlay_json)?;
-                                if !json_out {
-                                    eprintln!("  authority overlay written to {overlay_path}");
-                                }
-                            }
+                            state.active_overlay = effect.authority_overlay.clone();
+                        } else {
+                            state.active_overlay = None;
                         }
+                    } else {
+                        state.active_overlay = None;
                     }
 
                     do_audit(&writer, &audit_entry)?;
+
+                    // Emit AuthorityOverlayChange audit event if overlay changed
+                    let overlay_changed = match (&previous_overlay, &state.active_overlay) {
+                        (None, None) => false,
+                        (Some(_), None) | (None, Some(_)) => true,
+                        (Some(a), Some(b)) => {
+                            serde_json::to_string(a).ok() != serde_json::to_string(b).ok()
+                        }
+                    };
+                    if overlay_changed {
+                        let overlay_audit = serde_json::json!({
+                            "event_type": "AuthorityOverlayChange",
+                            "gate_id": record.gate_id,
+                            "previous_overlay": previous_overlay,
+                            "new_overlay": state.active_overlay,
+                        });
+                        if let Ok(ref w) = writer {
+                            w.maybe_audit(
+                                persona.audit.as_ref(),
+                                "AuthorityOverlayChange",
+                                &overlay_audit,
+                            )?;
+                        } else {
+                            let audit_path = file.replace(".json", ".audit.jsonl");
+                            let _ = ampersona_engine::state::audit_log::append_audit(
+                                &audit_path,
+                                &overlay_audit,
+                            );
+                        }
+                        if !json_out {
+                            if state.active_overlay.is_some() {
+                                eprintln!("  authority overlay applied from gate on_pass");
+                            } else {
+                                eprintln!("  authority overlay cleared");
+                            }
+                        }
+                    }
                     if let Ok(ref w) = writer {
                         w.write_state(&state)?;
                     } else {
@@ -1667,6 +1738,34 @@ fn cmd_audit(opts: AuditOpts) -> CmdExit {
                     if from_entry > 0 {
                         output["from_entry"] = serde_json::json!(from_entry);
                     }
+
+                    // state_rev consistency check
+                    let state_path = file.replace(".json", ".state.json");
+                    if let Ok(state) = ampersona_engine::state::phase::load_state(&state_path) {
+                        if std::path::Path::new(&audit_path).exists() {
+                            let transitions =
+                                ampersona_engine::state::audit_log::count_gate_transitions(
+                                    &audit_path,
+                                )
+                                .unwrap_or(0);
+                            // state_rev can be > transitions+1 if pending/approve both increment
+                            // but state_rev > gate_transitions + pending_count is suspicious
+                            let consistent = state.state_rev <= transitions + 1
+                                || state.last_transition.is_some();
+                            output["state_rev_check"] = serde_json::json!({
+                                "state_rev": state.state_rev,
+                                "gate_transitions": transitions,
+                                "consistent": consistent,
+                            });
+                            if !consistent {
+                                eprintln!(
+                                    "  warn: state_rev ({}) exceeds gate_transition count ({}) + 1",
+                                    state.state_rev, transitions
+                                );
+                            }
+                        }
+                    }
+
                     println!("{}", serde_json::to_string_pretty(&output).unwrap());
                 } else {
                     if from_entry > 0 {

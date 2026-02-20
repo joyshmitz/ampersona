@@ -11,13 +11,14 @@ ampersona implements a **hybrid automaton** — a system with both discrete tran
 and continuous state.
 
 ```
-H = (Q, X, Guard, Reset, Inv)
+H = (Q, X, Guard, Reset, Inv, Policy)
 
 Q      discrete states        PhaseState.current_phase      (e.g. "active", "trusted")
 X      continuous state        MetricSample.value            (domain metrics, serde_json::Value)
 Guard  transition condition    Gate.criteria → Vec<Criterion> evaluated as AND
-Reset  transition result       GateDecisionRecord            (new phase + witness record)
+Reset  transition result       Reset(q→q') = { phase: q', overlay: gate.on_pass, rev: rev+1 }
 Inv    phase invariant         PhaseInvariant.must_hold      [NOT YET IMPLEMENTED — see Gaps]
+Policy phase → authority       Q → P(A): phase-dependent authority via active_overlay
 ```
 
 The hybrid automaton is **parameterized** by domain:
@@ -51,6 +52,32 @@ Proof: `test elevation_denied_action_not_granted` in `policy/precedence.rs`.
 
 **Consequence:** the authority lattice is **fail-closed**. Unknown action → Deny.
 Unknown field in strict mode → reject. There is no fail-open path.
+
+### Authority Overlay — Post-Resolution Patch (ADR-010)
+
+Gate transitions can carry `on_pass.authority_overlay` that modifies effective authority
+for the target phase. Overlay uses **patch-replace** semantics, not meet-semilattice merge:
+
+```
+apply_overlay(resolved, overlay):
+  if overlay.autonomy:    result.autonomy = overlay.autonomy     // REPLACE
+  if overlay.actions.deny: result.denied ∪= overlay.deny        // UNION (additive)
+  if overlay.actions.allow: result.allowed = overlay.allow \ denied // REPLACE minus deny
+  if overlay.scope:       result.scope = overlay.scope           // REPLACE
+  if overlay.limits:      result.limits = overlay.limits         // REPLACE
+```
+
+**Why not meet-semilattice?** A meet-semilattice merge is mathematically incapable
+of expanding permissions: `min(supervised, full) = supervised`. Overlay's purpose is
+to grant phase-appropriate authority (e.g., promote → full autonomy). Patch-replace
+is the only correct semantics for this.
+
+**Deny preservation invariant:** `deny(persona) ⊆ deny(effective)`.
+Overlay can add deny entries but never remove them.
+Proof: `test overlay_cannot_override_deny` in `policy/precedence.rs`.
+
+**Lifecycle:** stored in `PhaseState.active_overlay`. Second overlay replaces first
+completely (no stacking). Cleared on override.
 
 ---
 
@@ -93,6 +120,9 @@ Signed checkpoints anchor the chain with ed25519 (JCS/RFC8785 canonicalization).
 |----------|-----------|----------|
 | Authority monotonicity | Adding a layer never increases permissions | `precedence.rs::allow_is_intersection` |
 | Deny wins unconditionally | No mechanism overrides explicit deny | `precedence.rs::elevation_denied_action_not_granted` |
+| Overlay deny preservation | Overlay can never weaken explicit deny | `precedence.rs::overlay_cannot_override_deny` |
+| Overlay expansion | Promote overlay can increase autonomy | `precedence.rs::overlay_expands_autonomy` |
+| Overlay deny additive | Overlay deny entries union with base deny | `precedence.rs::overlay_deny_additive` |
 | Demote priority | Demote gate fires before promote when both pass | `evaluator.rs::demote_wins_over_promote` |
 | Cooldown anti-Zeno | Gate cannot re-fire within cooldown_seconds | `evaluator.rs::cooldown_prevents_reevaluation` |
 | Gate idempotency | Same inputs → same gate decision | `evaluator.rs::metrics_hash_is_deterministic` |
@@ -183,3 +213,10 @@ This is a known gap. Detection: `state_rev` mismatch between state file and audi
 **Quorum is not Byzantine-fault-tolerant.**
 The planned quorum implementation assumes honest approvers.
 Collusion or compromise of N approvers is not in the threat model.
+
+**Overlay ordering is last-write-wins.**
+Multiple rapid gate transitions will each overwrite the previous overlay.
+There is no overlay stacking or accumulation. The effective authority at any
+point is `apply_overlay(resolve_authority(layers), state.active_overlay)`.
+If concurrent transitions are possible, the final overlay depends on which
+gate fires last.

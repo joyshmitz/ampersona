@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ampersona_core::actions::ActionId;
-use ampersona_core::spec::authority::{Authority, DenyEntry, Elevation};
+use ampersona_core::spec::authority::{Authority, AuthorityOverlay, DenyEntry, Elevation};
 use ampersona_core::state::ActiveElevation;
 use ampersona_core::traits::{DenyMeta, ResolvedAuthority};
 use ampersona_core::types::AutonomyLevel;
@@ -163,13 +163,101 @@ pub fn resolve_with_elevations(
     resolved
 }
 
+/// Apply an authority overlay as a post-resolution patch.
+///
+/// Overlay uses patch-replace semantics (ADR-010):
+/// - Present fields REPLACE the resolved value
+/// - Deny is additive (union) — explicit deny never weakened
+/// - Actions.allow replaces allowed minus deny
+/// - Absent fields leave resolved values unchanged
+pub fn apply_overlay(base: &ResolvedAuthority, overlay: &AuthorityOverlay) -> ResolvedAuthority {
+    let mut result = base.clone();
+
+    // Autonomy: REPLACE (not min)
+    if let Some(autonomy) = overlay.autonomy {
+        result.autonomy = autonomy;
+    }
+
+    if let Some(ref actions) = overlay.actions {
+        // Deny: UNION (additive — deny never weakened)
+        if let Some(ref deny) = actions.deny {
+            for entry in deny {
+                let id = entry.action_id().clone();
+                if !result.denied_actions.contains(&id) {
+                    result.denied_actions.push(id.clone());
+                }
+                result.allowed_actions.retain(|a| a != &id);
+
+                // Preserve deny metadata
+                if let DenyEntry::WithReason {
+                    reason,
+                    compliance_ref,
+                    ..
+                } = entry
+                {
+                    result.deny_metadata.insert(
+                        id.to_string(),
+                        DenyMeta {
+                            reason: Some(reason.clone()),
+                            compliance_ref: compliance_ref.clone(),
+                        },
+                    );
+                }
+            }
+        }
+
+        // Allow: REPLACE (minus deny — deny always wins)
+        if let Some(ref allow) = actions.allow {
+            result.allowed_actions = allow
+                .iter()
+                .filter(|a| !result.denied_actions.contains(a))
+                .cloned()
+                .collect();
+        }
+    }
+
+    // Scope: REPLACE
+    if let Some(ref scope) = overlay.scope {
+        result.scope = Some(scope.clone());
+    }
+
+    // Limits: REPLACE
+    if let Some(ref limits) = overlay.limits {
+        result.limits = Some(limits.clone());
+    }
+
+    result
+}
+
 /// Load workspace defaults from .ampersona/defaults.json and return as Authority if present.
+/// Logs a warning to stderr if the file exists but cannot be parsed.
 pub fn load_workspace_defaults() -> Option<Authority> {
     let path = ".ampersona/defaults.json";
-    let content = std::fs::read_to_string(path).ok()?;
-    let data: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let authority = data.get("authority")?;
-    serde_json::from_value(authority.clone()).ok()
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return None, // file doesn't exist — not an error
+    };
+    let data: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("  warn: {path}: unparseable JSON: {e}");
+            return None;
+        }
+    };
+    let authority = match data.get("authority") {
+        Some(a) => a,
+        None => {
+            eprintln!("  warn: {path}: missing 'authority' key");
+            return None;
+        }
+    };
+    match serde_json::from_value(authority.clone()) {
+        Ok(a) => Some(a),
+        Err(e) => {
+            eprintln!("  warn: {path}: invalid authority: {e}");
+            None
+        }
+    }
 }
 
 fn merge_limits_opt(
@@ -402,6 +490,177 @@ mod tests {
             .map(|a| a.to_string())
             .collect();
         assert!(!action_names.contains(&"git_push_main".to_string()));
+    }
+
+    // ── Overlay tests: ADR-010 patch-replace semantics ────────
+    // These test apply_overlay() which uses patch-replace (not meet-semilattice).
+    // Before the fix, these tested resolve_authority and FAILED.
+    // After ADR-010, overlay is a post-resolution patch via apply_overlay().
+
+    fn make_overlay(
+        autonomy: Option<AutonomyLevel>,
+        allow: Option<Vec<&str>>,
+        deny: Option<Vec<&str>>,
+    ) -> AuthorityOverlay {
+        let actions = if allow.is_some() || deny.is_some() {
+            Some(Actions {
+                allow: allow.map(|v| v.into_iter().filter_map(|s| s.parse().ok()).collect()),
+                deny: deny.map(|v| {
+                    v.into_iter()
+                        .map(|s| DenyEntry::Simple(s.parse().unwrap()))
+                        .collect()
+                }),
+                scoped: None,
+            })
+        } else {
+            None
+        };
+        AuthorityOverlay {
+            autonomy,
+            scope: None,
+            actions,
+            limits: None,
+        }
+    }
+
+    #[test]
+    fn overlay_expands_autonomy() {
+        // Persona: supervised, overlay: full → effective should be full.
+        // ADR-010: overlay REPLACES autonomy (not min).
+        let persona = make_authority(AutonomyLevel::Supervised, vec!["read_file"], vec![]);
+        let base = resolve_authority(&[&persona]);
+        assert_eq!(base.autonomy, AutonomyLevel::Supervised);
+
+        let overlay = make_overlay(Some(AutonomyLevel::Full), None, None);
+        let effective = apply_overlay(&base, &overlay);
+        assert_eq!(
+            effective.autonomy,
+            AutonomyLevel::Full,
+            "overlay should expand autonomy from supervised to full"
+        );
+    }
+
+    #[test]
+    fn overlay_adds_allowed_actions() {
+        // Persona: [read_file], overlay: [read_file, deploy] → deploy should be allowed.
+        // ADR-010: overlay REPLACES allowed (not intersection).
+        let persona = make_authority(AutonomyLevel::Full, vec!["read_file"], vec![]);
+        let base = resolve_authority(&[&persona]);
+
+        let overlay = make_overlay(None, Some(vec!["read_file", "deploy"]), None);
+        let effective = apply_overlay(&base, &overlay);
+        let action_names: Vec<String> = effective
+            .allowed_actions
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        assert!(
+            action_names.contains(&"deploy".to_string()),
+            "overlay should add deploy to allowed actions, got: {action_names:?}"
+        );
+    }
+
+    #[test]
+    fn overlay_cannot_override_deny() {
+        // Persona denies deploy, overlay allows deploy → deny wins.
+        // ADR-010 invariant: deny(persona) ⊆ deny(effective).
+        let persona = make_authority(AutonomyLevel::Full, vec!["read_file"], vec!["deploy"]);
+        let base = resolve_authority(&[&persona]);
+
+        let overlay = make_overlay(None, Some(vec!["read_file", "deploy"]), None);
+        let effective = apply_overlay(&base, &overlay);
+        let denied_names: Vec<String> = effective
+            .denied_actions
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        assert!(
+            denied_names.contains(&"deploy".to_string()),
+            "explicit deny must survive overlay"
+        );
+        let allowed_names: Vec<String> = effective
+            .allowed_actions
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        assert!(
+            !allowed_names.contains(&"deploy".to_string()),
+            "denied action must not appear in allowed"
+        );
+    }
+
+    #[test]
+    fn overlay_with_only_actions_preserves_autonomy() {
+        // Partial overlay: only actions, no autonomy → autonomy unchanged.
+        let persona = make_authority(AutonomyLevel::Supervised, vec!["read_file"], vec![]);
+        let base = resolve_authority(&[&persona]);
+
+        let overlay = make_overlay(None, Some(vec!["read_file", "deploy"]), None);
+        let effective = apply_overlay(&base, &overlay);
+        assert_eq!(
+            effective.autonomy,
+            AutonomyLevel::Supervised,
+            "autonomy should be unchanged when overlay doesn't set it"
+        );
+        let action_names: Vec<String> = effective
+            .allowed_actions
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        assert!(action_names.contains(&"deploy".to_string()));
+    }
+
+    #[test]
+    fn overlay_replaces_not_merges() {
+        // Second overlay replaces first completely (no stacking).
+        let persona = make_authority(AutonomyLevel::Supervised, vec!["read_file"], vec![]);
+        let base = resolve_authority(&[&persona]);
+
+        let overlay1 = make_overlay(
+            Some(AutonomyLevel::Full),
+            Some(vec!["read_file", "deploy"]),
+            None,
+        );
+        let after_first = apply_overlay(&base, &overlay1);
+        assert_eq!(after_first.autonomy, AutonomyLevel::Full);
+
+        // Second overlay: only sets autonomy to readonly, doesn't mention actions
+        let overlay2 = make_overlay(Some(AutonomyLevel::Readonly), None, None);
+        let after_second = apply_overlay(&base, &overlay2);
+        // Should be based on base, not on after_first (no stacking)
+        assert_eq!(after_second.autonomy, AutonomyLevel::Readonly);
+        // Actions should be from base (overlay2 doesn't set actions)
+        assert_eq!(after_second.allowed_actions, base.allowed_actions);
+    }
+
+    #[test]
+    fn overlay_deny_additive() {
+        // Overlay can add new deny entries but cannot remove existing ones.
+        let persona = make_authority(
+            AutonomyLevel::Full,
+            vec!["read_file", "deploy"],
+            vec!["delete_production_data"],
+        );
+        let base = resolve_authority(&[&persona]);
+        assert_eq!(base.denied_actions.len(), 1);
+
+        let overlay = make_overlay(None, None, Some(vec!["deploy"]));
+        let effective = apply_overlay(&base, &overlay);
+        // Both the original deny and the overlay deny should be present
+        let denied_names: Vec<String> = effective
+            .denied_actions
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        assert!(denied_names.contains(&"delete_production_data".to_string()));
+        assert!(denied_names.contains(&"deploy".to_string()));
+        // deploy should be removed from allowed
+        let allowed_names: Vec<String> = effective
+            .allowed_actions
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        assert!(!allowed_names.contains(&"deploy".to_string()));
     }
 
     #[test]

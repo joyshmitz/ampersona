@@ -4,6 +4,25 @@ use std::collections::HashMap;
 use crate::actions::ActionId;
 use crate::types::{AutonomyLevel, GateApproval, RiskLevel};
 
+/// Partial authority overlay applied as a patch after resolution.
+///
+/// All fields are Optional. Only present fields replace the resolved authority.
+/// See ADR-010 for semantics.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AuthorityOverlay {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autonomy: Option<AutonomyLevel>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actions: Option<Actions>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limits: Option<Limits>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Authority {
     pub autonomy: AutonomyLevel,

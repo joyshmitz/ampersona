@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 
-use ampersona_core::spec::gates::{Criterion, Gate};
+use ampersona_core::spec::gates::{Criterion, Gate, MetricSchema};
 use ampersona_core::state::PhaseState;
 use ampersona_core::traits::{CriteriaResult, MetricQuery, MetricsProvider};
 use ampersona_core::types::{CriterionOp, GateApproval, GateDirection, GateEnforcement};
@@ -62,7 +62,12 @@ impl DefaultGateEvaluator {
                 }
             }
 
-            let (all_pass, results, snapshot) = self.evaluate_criteria(&gate.criteria, metrics);
+            let (all_pass, results, snapshot) = self.evaluate_criteria(
+                &gate.criteria,
+                metrics,
+                gate.direction,
+                gate.metrics_schema.as_ref(),
+            );
 
             if all_pass {
                 // Compute metrics hash for idempotency
@@ -128,6 +133,8 @@ impl DefaultGateEvaluator {
         &self,
         criteria: &[Criterion],
         metrics: &dyn MetricsProvider,
+        direction: GateDirection,
+        metrics_schema: Option<&HashMap<String, MetricSchema>>,
     ) -> (
         bool,
         Vec<CriteriaResult>,
@@ -143,15 +150,25 @@ impl DefaultGateEvaluator {
                 window: None,
             };
 
-            let (actual, pass) = match metrics.get_metric(&query) {
+            let (actual, pass, type_mismatch) = match metrics.get_metric(&query) {
                 Ok(sample) => {
                     snapshot.insert(criterion.metric.clone(), sample.value.clone());
-                    let pass = compare_values(&criterion.op, &sample.value, &criterion.value);
-                    (sample.value, pass)
+
+                    // Type validation: check metric value matches declared schema type
+                    if let Some(mismatch) =
+                        check_metric_type(&criterion.metric, &sample.value, metrics_schema)
+                    {
+                        // Fail-closed: demote fires, promote blocked
+                        let pass = direction == GateDirection::Demote;
+                        (sample.value, pass, Some(mismatch))
+                    } else {
+                        let pass = compare_values(&criterion.op, &sample.value, &criterion.value);
+                        (sample.value, pass, None)
+                    }
                 }
                 Err(_) => {
                     all_pass = false;
-                    (serde_json::Value::Null, false)
+                    (serde_json::Value::Null, false, None)
                 }
             };
 
@@ -165,10 +182,52 @@ impl DefaultGateEvaluator {
                 value: criterion.value.clone(),
                 actual,
                 pass,
+                type_mismatch,
             });
         }
 
         (all_pass, results, snapshot)
+    }
+}
+
+/// Check if a metric value matches the declared type in metrics_schema.
+/// Returns Some(mismatch_description) if there's a type mismatch, None if ok or no schema.
+fn check_metric_type(
+    metric_name: &str,
+    value: &serde_json::Value,
+    schema: Option<&HashMap<String, MetricSchema>>,
+) -> Option<String> {
+    let schema = schema?;
+    let metric_schema = schema.get(metric_name)?;
+    let expected_type = metric_schema.metric_type.as_str();
+
+    let matches = match expected_type {
+        "number" | "numeric" | "integer" | "float" => value.is_number(),
+        "boolean" | "bool" => value.is_boolean(),
+        "string" => value.is_string(),
+        _ => true, // unknown schema type → no check
+    };
+
+    if matches {
+        None
+    } else {
+        Some(format!(
+            "metric '{}' expected type '{}', got {}",
+            metric_name,
+            expected_type,
+            value_type_name(value)
+        ))
+    }
+}
+
+fn value_type_name(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
     }
 }
 
@@ -291,6 +350,7 @@ mod tests {
             active_elevations: vec![],
             last_transition: None,
             pending_transition: None,
+            active_overlay: None,
             updated_at: Utc::now(),
         };
 
@@ -340,6 +400,7 @@ mod tests {
                 state_rev: 0,
             }),
             pending_transition: None,
+            active_overlay: None,
             updated_at: Utc::now(),
         };
 
@@ -376,6 +437,7 @@ mod tests {
             active_elevations: vec![],
             last_transition: None,
             pending_transition: None,
+            active_overlay: None,
             updated_at: Utc::now(),
         };
 
@@ -455,6 +517,7 @@ mod tests {
                 state_rev: 0,
             }),
             pending_transition: None,
+            active_overlay: None,
             updated_at: Utc::now(),
         };
 
@@ -499,6 +562,7 @@ mod tests {
             active_elevations: vec![],
             last_transition: None,
             pending_transition: None,
+            active_overlay: None,
             updated_at: Utc::now(),
         };
 
@@ -509,6 +573,92 @@ mod tests {
         let evaluator = DefaultGateEvaluator;
         let result = evaluator.evaluate(&gates, &state, &metrics);
         assert!(result.is_none());
+    }
+
+    // ── Metrics type validation tests ─────────────────────────────
+
+    #[test]
+    fn type_mismatch_demote_fires() {
+        // String "hot" for numeric metric, demote gate → criterion passes (fail-closed: demote fires)
+        let evaluator = DefaultGateEvaluator;
+        let criteria = vec![Criterion {
+            metric: "temperature".into(),
+            op: CriterionOp::Gte,
+            value: serde_json::json!(100),
+        }];
+        let mut schema = HashMap::new();
+        schema.insert(
+            "temperature".to_string(),
+            ampersona_core::spec::gates::MetricSchema {
+                metric_type: "number".to_string(),
+            },
+        );
+        let mut metrics_map = HashMap::new();
+        metrics_map.insert("temperature".into(), serde_json::json!("hot")); // string, not number
+        let metrics = TestMetrics(metrics_map);
+
+        let (all_pass, results, _) =
+            evaluator.evaluate_criteria(&criteria, &metrics, GateDirection::Demote, Some(&schema));
+        assert!(
+            all_pass,
+            "demote with type mismatch should pass (fail-closed)"
+        );
+        assert!(results[0].type_mismatch.is_some());
+    }
+
+    #[test]
+    fn type_mismatch_promote_blocked() {
+        // String "hot" for numeric metric, promote gate → criterion fails (fail-closed: promote blocked)
+        let evaluator = DefaultGateEvaluator;
+        let criteria = vec![Criterion {
+            metric: "temperature".into(),
+            op: CriterionOp::Gte,
+            value: serde_json::json!(100),
+        }];
+        let mut schema = HashMap::new();
+        schema.insert(
+            "temperature".to_string(),
+            ampersona_core::spec::gates::MetricSchema {
+                metric_type: "number".to_string(),
+            },
+        );
+        let mut metrics_map = HashMap::new();
+        metrics_map.insert("temperature".into(), serde_json::json!("hot"));
+        let metrics = TestMetrics(metrics_map);
+
+        let (all_pass, results, _) =
+            evaluator.evaluate_criteria(&criteria, &metrics, GateDirection::Promote, Some(&schema));
+        assert!(
+            !all_pass,
+            "promote with type mismatch should fail (fail-closed)"
+        );
+        assert!(results[0].type_mismatch.is_some());
+    }
+
+    #[test]
+    fn type_match_normal_behavior() {
+        // Correct types → no change in behavior
+        let evaluator = DefaultGateEvaluator;
+        let criteria = vec![Criterion {
+            metric: "score".into(),
+            op: CriterionOp::Gte,
+            value: serde_json::json!(10),
+        }];
+        let mut schema = HashMap::new();
+        schema.insert(
+            "score".to_string(),
+            ampersona_core::spec::gates::MetricSchema {
+                metric_type: "number".to_string(),
+            },
+        );
+        let mut metrics_map = HashMap::new();
+        metrics_map.insert("score".into(), serde_json::json!(15));
+        let metrics = TestMetrics(metrics_map);
+
+        let (all_pass, results, _) =
+            evaluator.evaluate_criteria(&criteria, &metrics, GateDirection::Promote, Some(&schema));
+        assert!(all_pass, "correct types should pass normally");
+        assert!(results[0].type_mismatch.is_none());
     }
 
     #[test]
@@ -540,6 +690,7 @@ mod tests {
             active_elevations: vec![],
             last_transition: None,
             pending_transition: None,
+            active_overlay: None,
             updated_at: Utc::now(),
         };
         let result = evaluator.evaluate(&gates, &state, &metrics).unwrap();
@@ -562,6 +713,7 @@ mod tests {
                 state_rev: 1,
             }),
             pending_transition: None,
+            active_overlay: None,
             updated_at: Utc::now(),
         };
         let result2 = evaluator.evaluate(&gates, &state2, &metrics);
@@ -586,6 +738,7 @@ mod tests {
                 state_rev: 1,
             }),
             pending_transition: None,
+            active_overlay: None,
             updated_at: Utc::now(),
         };
         let result3 = evaluator.evaluate(&gates, &state3, &metrics);

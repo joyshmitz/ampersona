@@ -121,6 +121,25 @@ pub fn create_checkpoint(audit_path: &str, checkpoint_path: &str) -> Result<serd
     Ok(checkpoint)
 }
 
+/// Count GateTransition events in the audit log.
+pub fn count_gate_transitions(path: &str) -> Result<u64> {
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("cannot read audit {path}"))?;
+
+    let mut count = 0u64;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) {
+            if entry.get("event_type").and_then(|v| v.as_str()) == Some("GateTransition") {
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
 /// Verify a checkpoint against the current audit chain.
 pub fn verify_checkpoint(audit_path: &str, checkpoint_path: &str) -> Result<bool> {
     let checkpoint_content = std::fs::read_to_string(checkpoint_path)
