@@ -305,7 +305,7 @@ Gate {
   cooldown_seconds: integer (optional, default 0),
   from_phase: string | null (required),
   to_phase: string (required),
-  criteria: Criterion[] (required, min 1),
+  criteria_logic: CriteriaLogic (required),
   metrics_schema: map<string, MetricSchema> (optional),
   approval: GateApproval (optional, default "auto"),
   on_pass: GateEffect (optional)
@@ -313,6 +313,12 @@ Gate {
 
 GateDirection = "promote" | "demote"
 GateEnforcement = "enforce" | "observe"
+
+CriteriaLogic = All(Criterion[]) | Any(Criterion[])
+  - All: AND — all criteria must pass for gate to fire
+  - Any: OR — at least one criterion must pass for gate to fire
+  - No Not variant, no recursive nesting (see ADR-007)
+  - Backward compat: bare "criteria" array interpreted as All([...])
 
 Criterion {
   metric: string (required),
@@ -331,6 +337,54 @@ MetricSchema {
 
 GateEffect {
   authority_overlay: partial Authority (optional)
+}
+```
+
+### CriteriaLogic Examples
+
+**All (AND) — default, backward compatible:**
+```json
+{
+  "id": "promote-to-trusted",
+  "direction": "promote",
+  "from_phase": "active",
+  "to_phase": "trusted",
+  "criteria_logic": {
+    "all": [
+      { "metric": "tasks_completed", "op": "gte", "value": 10 },
+      { "metric": "error_rate", "op": "lt", "value": 0.05 }
+    ]
+  }
+}
+```
+
+**Any (OR) — at least one criterion fires:**
+```json
+{
+  "id": "demote-on-failure",
+  "direction": "demote",
+  "from_phase": "trusted",
+  "to_phase": "active",
+  "criteria_logic": {
+    "any": [
+      { "metric": "error_rate", "op": "gt", "value": 0.1 },
+      { "metric": "timeout_count", "op": "gt", "value": 5 },
+      { "metric": "human_revoked", "op": "eq", "value": true }
+    ]
+  }
+}
+```
+
+**Legacy format (still accepted, interpreted as All):**
+```json
+{
+  "id": "legacy-gate",
+  "direction": "promote",
+  "from_phase": null,
+  "to_phase": "active",
+  "criteria": [
+    { "metric": "initialized", "op": "eq", "value": true }
+  ]
 }
 ```
 
@@ -572,6 +626,7 @@ Distinct from elevation. Override = emergency bypass of a failed gate.
 ```
 UnitFloat:       f64 in [0.0, 1.0]
 AutonomyLevel:   readonly | supervised | full
+CriteriaLogic:   All(Criterion[]) | Any(Criterion[])
 CriterionOp:     eq | neq | gt | gte | lt | lte
 GateApproval:    auto | human | quorum
 GateDirection:   promote | demote
